@@ -304,6 +304,34 @@ KIND=$(fm_meta_get "$META" kind)
 WT=$(fm_meta_get "$META" worktree)
 [ -n "$KIND" ] || KIND=ship
 
+# --- nio-chat-agent lifecycle verbs ------------------------------------------
+# A nio-chat worker has no terminal, so its lifecycle verbs are library calls,
+# not keystrokes: interrupt cancels this task's own active run, exit settles
+# the channel while keeping the thread for later reuse, and relaunch
+# re-dispatches on the recorded thread through the spawn plane's own nio
+# relaunch path. The settled run record is the proof, not a pane read
+# (docs/nio-chat-agent-backend.md).
+if [ "$RECORDED_HARNESS" = nio-chat-agent ]; then
+  [ "$BACKEND" = nio-chat ] || die "task $ID records nio-chat-agent on backend '$BACKEND'; its lifecycle verbs run only through the nio-chat runtime"
+  fm_backend_validate "$BACKEND" || exit 1
+  # shellcheck source=bin/fm-niochat-lib.sh
+  . "$SCRIPT_DIR/fm-niochat-lib.sh"
+  case "$VERB" in
+    interrupt)
+      out=$(fm_niochat_cancel "$STATE" "$ID") || die "interrupt of $ID failed: ${out:-run cancel refused}"
+      printf '%s\n' "$out"
+      ;;
+    exit)
+      out=$(fm_niochat_stop "$STATE" "$ID") || die "exit of $ID failed: ${out:-channel settle refused}"
+      printf '%s\n' "$out"
+      ;;
+    relaunch)
+    exec "$SCRIPT_DIR/fm-spawn.sh" "$ID" --relaunch --harness nio-chat-agent
+    ;;
+  esac
+  exit 0
+fi
+
 HARNESS=$(fm_control_harness_family "$RECORDED_HARNESS") \
   || die "task $ID records harness '${RECORDED_HARNESS:-none}', which has no verified control mechanics; fm-control refuses to guess an interrupt key or exit command"
 fm_control_harness_supported "$HARNESS" \

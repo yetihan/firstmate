@@ -532,6 +532,33 @@ test_meta_get_and_backend_of_meta() {
   pass "fm_meta_get / fm_backend_of_meta: read key=value, default backend to tmux"
 }
 
+# The nio-chat worker runtime records no pane and no worktree: its endpoint is
+# the agent thread in external_ref plus the virtual fm-<id> label in window
+# (docs/nio-chat-agent-backend.md "Task shape and metadata"), and the forbidden
+# worktree=/project= keys are part of that contract, not a courtesy.
+test_niochat_task_endpoint_validation() {
+  local meta=$TMP_ROOT/nio-endpoint.meta out
+  fm_write_meta "$meta" "backend=nio-chat" "window=fm-nio1" \
+    "endpoint_task_id=nio1" "external_ref=th-abc123" "harness=nio-chat-agent"
+  fm_backend_validate_task_endpoint "$meta" nio1 2>/dev/null || fail "valid nio-chat endpoint refused"
+  [ "$FM_BACKEND_VALIDATED_BACKEND:$FM_BACKEND_VALIDATED_TARGET" = "nio-chat:fm-nio1" ] \
+    || fail "nio-chat endpoint validation returned wrong identity"
+  out=$(fm_backend_validate_task_endpoint "$meta" nio2 2>&1) && fail "a task id other than the binding must refuse"
+  assert_contains "$out" "belongs to task nio1" "the mismatched-task refusal must name the binding"
+  printf 'worktree=/tmp/somewhere\n' >> "$meta"
+  out=$(fm_backend_validate_task_endpoint "$meta" nio1 2>&1) && fail "a nio-chat task recording a worktree must refuse"
+  assert_contains "$out" "unexpectedly records a worktree endpoint" "the worktree refusal must name the key"
+  fm_write_meta "$meta" "backend=nio-chat" "window=fm-nio1" \
+    "endpoint_task_id=nio1" "harness=nio-chat-agent"
+  out=$(fm_backend_validate_task_endpoint "$meta" nio1 2>&1) && fail "a missing thread reference must refuse"
+  assert_contains "$out" "thread reference" "the missing-thread refusal must name external_ref"
+  fm_write_meta "$meta" "backend=tmux" "backend=nio-chat" "window=fm-nio1" \
+    "endpoint_task_id=nio1" "external_ref=th-abc123"
+  out=$(fm_backend_validate_task_endpoint "$meta" nio1 2>&1) && fail "an ambiguous backend identity must refuse"
+  assert_contains "$out" "ambiguous nio-chat backend identity" "the ambiguity refusal must be explicit"
+  pass "nio-chat task endpoint: thread+label validate, worktree and ambiguity refuse"
+}
+
 test_resolve_selector_three_forms() {
   local state=$TMP_ROOT/resolve-state fakebin out
   mkdir -p "$state"
@@ -1128,6 +1155,7 @@ test_backend_validate_refuses_unknown
 test_backend_source_shell_portable
 test_backend_validate_spawn_accepts_orca
 test_meta_get_and_backend_of_meta
+test_niochat_task_endpoint_validation
 test_resolve_selector_three_forms
 test_backend_of_selector_matches_explicit_target_meta
 test_send_tmux_contract
