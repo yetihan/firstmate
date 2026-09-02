@@ -477,11 +477,34 @@ test_check_script_events_and_marker() {
   fm_record streaming run-1 $(( $(date +%s) + 600 ))
   out=$(bash "$check")
   [ -z "$out" ] || fail "streaming before deadline must print nothing, got '$out'"
-  # Streaming past the deadline prints one timeout event.
+  # A terminal lifecycle event in the capture wakes without waiting out the
+  # deadline: nothing else ever moves the record off streaming, so the check
+  # must read the finished run's own capture (real-server e2e finding).
+  nio_sse_completed run-1 th-1 world > "$STATE/t1.niochat-stream.log"
+  out=$(bash "$check")
+  [ "$out" = 'niochat t1 done' ] || fail "a completed capture must print done before the deadline, got '$out'"
+  nio fm_niochat_wake_ack "$STATE" t1 'done' run-1
+  out=$(bash "$check")
+  [ -z "$out" ] || fail "the marker must suppress the capture-derived done, got '$out'"
+  nio_sse_interrupted run-1 th-1 > "$STATE/t1.niochat-stream.log"
+  rm -f "$STATE/t1.niochat-wake-sent"
+  out=$(bash "$check")
+  [ "$out" = 'niochat t1 interrupted' ] || fail "an interrupted capture must print its event, got '$out'"
+  nio fm_niochat_wake_ack "$STATE" t1 interrupted run-1
+  # A deferred question keeps its interrupted capture: the markered terminal
+  # signal stays quiet, and once the retry window passes the deadline fires
+  # the timeout nudge - the deferral acked interrupted, never timeout.
   fm_record streaming run-1 1
   out=$(bash "$check")
+  [ "$out" = 'niochat t1 timeout' ] || fail "a markered terminal signal must still allow the deadline nudge, got '$out'"
+  nio fm_niochat_wake_ack "$STATE" t1 timeout run-1
+  out=$(bash "$check")
+  [ -z "$out" ] || fail "the acked timeout nudge must stay silent, got '$out'"
+  # A hung run with no terminal capture times out the same way.
+  nio_sse_hang run-9 th-1 > "$STATE/t1.niochat-stream.log"
+  rm -f "$STATE/t1.niochat-wake-sent"
+  out=$(bash "$check")
   [ "$out" = 'niochat t1 timeout' ] || fail "past-deadline streaming must print the timeout event, got '$out'"
-  # The same event for the same run is suppressed by the marker.
   nio fm_niochat_wake_ack "$STATE" t1 timeout run-1
   out=$(bash "$check")
   [ -z "$out" ] || fail "a markered event must stay silent, got '$out'"

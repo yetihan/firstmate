@@ -565,6 +565,7 @@ set -u
 STATE=$(printf '%q' "$state")
 ID=$(printf '%q' "$id")
 REC="\$STATE/\$ID.niochat-run"
+STREAM="\$STATE/\$ID.niochat-stream.log"
 MARK="\$STATE/\$ID.niochat-wake-sent"
 [ -f "\$REC" ] || exit 0
 status=\$(jq -r '.status // empty' "\$REC" 2>/dev/null) || exit 0
@@ -574,15 +575,29 @@ deadline=\$(jq -r '.deadline // 0' "\$REC" 2>/dev/null) || deadline=0
 case "\$status" in
   interrupted|done|cancelled|timeout|failed) event=\$status ;;
   streaming)
-    [ "\$deadline" -gt 0 ] 2>/dev/null || exit 0
-    [ "\$now" -ge "\$deadline" ] 2>/dev/null || exit 0
-    event=timeout
+    # The record is the busy truth, but nothing else ever moves it off
+    # streaming: a finished run must wake firstmate from its own terminal
+    # capture, or a successful run would sit silent until its deadline.
+    term=\$(sed -n 's/^data: *//p' "\$STREAM" 2>/dev/null | grep '"method": *"lifecycle"' | tail -1 | jq -r '.params.data.event // empty' 2>/dev/null)
+    event=
+    case "\$term" in
+      completed) event=done ;;
+      interrupted) event=interrupted ;;
+    esac
+    [ -n "\$event" ] && grep -qxF "\$event \$run" "\$MARK" 2>/dev/null && event=
+    if [ -z "\$event" ]; then
+      # No unacknowledged terminal signal: the deadline is the retry nudge -
+      # both for a hung run and for a deferred question whose retry window
+      # has passed (reconcile decides by the capture, never by the wake type).
+      [ "\$deadline" -gt 0 ] 2>/dev/null || exit 0
+      [ "\$now" -ge "\$deadline" ] 2>/dev/null || exit 0
+      grep -qxF "timeout \$run" "\$MARK" 2>/dev/null && exit 0
+      event=timeout
+    fi
     ;;
   *) exit 0 ;;
 esac
-seen=\$(cat "\$MARK" 2>/dev/null || true)
-current="\$event \$run"
-[ "\$seen" = "\$current" ] && exit 0
+grep -qxF "\$event \$run" "\$MARK" 2>/dev/null && exit 0
 printf 'niochat %s %s\\n' "\$ID" "\$event"
 EOF
   chmod 0700 "$check"
@@ -594,8 +609,15 @@ fm_niochat_status_append() {  # <state-dir> <id> <line>
   printf '%s\n' "$3" >> "$1/$2.status"
 }
 
+# The wake marker holds every acknowledged "<event> <run>" line, not just the
+# latest: a deferred question must quiet its terminal signal without silencing
+# the deadline's later retry nudge, and those are two different keys.
 fm_niochat_wake_ack() {  # <state-dir> <id> <status> <run-id>
-  printf '%s %s\n' "$3" "$4" > "$(fm_niochat_wake_marker_path "$1" "$2")"
+  local mark key
+  mark=$(fm_niochat_wake_marker_path "$1" "$2")
+  key="$3 $4"
+  grep -qxF "$key" "$mark" 2>/dev/null && return 0
+  printf '%s\n' "$key" >> "$mark"
 }
 
 fm_niochat_write_report() {  # <data-dir> <id> <thread> <run> <captured> <text>
@@ -637,9 +659,11 @@ fm_niochat_reconcile() {  # <state-dir> <data-dir> <id>
             qline=$(fm_niochat_pending_question "$thread")
           elif [ "$rc" = 2 ]; then
             # The run finished interrupted but the app is unreachable now:
-            # quiet the timeout wake for one retry window and try again.
+            # quiet the terminal wake for one retry window - acking the
+            # interrupted signal, never the timeout key, whose fire after the
+            # window IS the retry nudge.
             fm_niochat_record_set "$state" "$id" deadline "$(( $(date +%s) + $(fm_niochat_retry_window) ))"
-            fm_niochat_wake_ack "$state" "$id" timeout "$run"
+            fm_niochat_wake_ack "$state" "$id" interrupted "$run"
             printf 'retry: server unreachable while reading the question; retrying after the retry window\n'
             return 0
           fi

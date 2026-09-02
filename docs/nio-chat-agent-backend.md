@@ -70,7 +70,7 @@ The brief IS the run's user message: the agent cannot read files, so everything 
 Busy/idle: the server's own status read stays `idle` during streaming runs (verified), so busy truth is the local run record alone - `bin/fm-busy-lib.sh` classifies from it, and `bin/fm-crew-state.sh` reads it directly.
 No network call is made to classify a task.
 
-Wake path: the generated `state/<id>.check.sh` (registered through `bin/fm-check-register.sh`) does local reads only and prints `niochat <id> <event>` when the run record holds a state firstmate must act on - a settled run, or a streaming run past its deadline.
+Wake path: the generated `state/<id>.check.sh` (registered through `bin/fm-check-register.sh`) does local reads only and prints `niochat <id> <event>` when the run record holds a state firstmate must act on - a settled run, a streaming run whose stream capture already holds the terminal lifecycle event (a finished run must not wait out its deadline), or a streaming run past its deadline.
 Reconcile (`bin/fm-niochat.sh reconcile`) then finalizes it: a completed run's captured reply is written to `data/<id>/report.md` with a `done:` status line; an interrupted run's ask_user question is read from the thread history and surfaced as a `blocked:` status line with the answer command; a streaming run past its deadline is cancelled and failed.
 An unreachable server at finish time bumps the deadline by a bounded retry window instead of refiring the wake every poll.
 
