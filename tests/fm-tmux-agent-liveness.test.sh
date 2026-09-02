@@ -243,6 +243,29 @@ kill -0 "$bg_pid" 2>/dev/null \
   || fail "the background harness-named process died during the check, so this case proves nothing"
 pass "tmux liveness: a harness-named background process in an idle pane still classifies dead"
 
+# --- a harness-named DEAD pane must not inherit its retained title ----------
+# remain-on-exit keeps a pane, and its last process title, after the process
+# exits. tmux keeps reporting that retained title through
+# #{pane_current_command}, so the title source alone would call a dead pane
+# alive forever and supervision would never notice the worker died. The case
+# asserts the retained title still names a harness first, so it cannot pass
+# vacuously, then requires the composed verdict to be `dead`.
+
+new_window gone "$LAB/bin/claude-link" 3
+"$REAL_TMUX" -L "$SOCKET" set-window-option -t "$SESSION:gone" remain-on-exit on \
+  || fail "could not keep the exited pane for the dead-pane case"
+for _ in $(seq 1 100); do
+  [ "$("$REAL_TMUX" -L "$SOCKET" display-message -p -t "$SESSION:gone" '#{pane_dead}' 2>/dev/null)" = 1 ] && break
+  sleep 0.1
+done
+title_classifies_agent "$SESSION:gone" \
+  || fail "the retained title must still name a harness after the process exits, or this case proves nothing"
+fm_backend_tmux_foreground_comms "$SESSION:gone" | grep -q . \
+  && fail "a dead pane must have no foreground process group, or this case proves nothing"
+[ "$(fm_backend_agent_state tmux "$SESSION:gone")" = dead ] \
+  || fail "a harness-named pane whose process exited must classify dead, never alive from its retained title"
+pass "tmux liveness: a harness-named dead pane classifies dead, not alive from its retained title"
+
 # --- an absent window never inherits tmux's active-window fallback ----------
 # tmux answers a display-message for an absent target from the CLIENT's active
 # window instead of failing, so both raw name reads can describe a completely
