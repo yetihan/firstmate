@@ -58,7 +58,7 @@ Either source naming a verified harness is enough for `alive`, because a false `
 A pane kept present by `remain-on-exit` after its process exited keeps reporting that process's retained title, so pane death retires the title source entirely: once no live foreground group names a harness, the verdict is `dead`, while a harness child that still holds the tty keeps the pane `alive` through the foreground source.
 
 Scoping the second source to the foreground process group rather than to the pane's descendants is deliberate: a harness-named process left running in the background of an otherwise idle pane must not read as an agent.
-The same scoping covers multi-process launchers without a special case, so the Pi Launcher path is attributed through its `pi-signed` wrapper and `pi` engine even though its title is the exact foreground command `pi-launcher`.
+The same scoping covers multi-process launchers without a special case, so the Pi Launcher path is attributed through its `pi-signed` wrapper and `pi` engine whether its title is the launcher's own `pi-launcher` name or a bare interpreter name.
 Direct executable identities `pi`, `pi-signed`, and `Pi` remain accepted exactly, and similar or prefixed process names are not accepted through those exact Pi-family entries.
 Muse is likewise anchored to the exact `muse` launcher identity or the installed `muse-bin-<version>` prefix, so unrelated names such as `musescore` and `amuse` remain ambiguous.
 Cursor is identified from its exact `cursor-agent` identity or versioned install tree in the foreground process path or structured argv[0]; a bare `node` or unrelated `agent` remains ambiguous.

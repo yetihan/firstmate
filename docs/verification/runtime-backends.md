@@ -95,6 +95,22 @@ ok - harness liveness: claude 2.1.220 (Claude Code) classifies alive
 # checked 7 installed harness(es)
 ```
 
+Installed-wrapper checks:
+
+```sh
+basename "$(command -v pi-signed)"
+pi-signed --version
+pi --version
+```
+
+Observed bounded output:
+
+```text
+pi-signed
+0.82.0
+0.82.0
+```
+
 ### 2026-09-02 drift-guard rerun
 
 The guard itself needed a correction before this rerun could be trusted.
@@ -129,22 +145,6 @@ Observed identities from this rerun, and the resulting verdict:
 Claude Code's title attributes it again at 2.1.236, while Pi's title is now a bare `node` that only the foreground source attributes, so title drift moves in both directions between releases and the two-source verdict stays load-bearing.
 Codex 0.152.0 is installed on this machine only inside the macOS ChatGPT-app bundle, with the PATH name `codex` shadowed by a dead cmux-cli temp shim that exits 127, so the guard passed the shim over, verified the bundle binary, and noted the PATH shadow for spawn health.
 Grok is no longer installed here - only a non-executing wrapper remains on PATH, which the guard reports as an unlaunchable candidate rather than an installed harness - so the 2026-08-03 rows for grok, opencode, pi-signed, and kimi above, plus cursor's and muse's own dated verifications, remain the latest records for those adapters.
-
-Installed-wrapper checks:
-
-```sh
-basename "$(command -v pi-signed)"
-pi-signed --version
-pi --version
-```
-
-Observed bounded output:
-
-```text
-pi-signed
-0.82.0
-0.82.0
-```
 
 ### Harness-adapter instruction routing
 
