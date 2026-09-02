@@ -2119,6 +2119,16 @@ if [ -e "$STATE/$ID.backlog-close" ] || [ -L "$STATE/$ID.backlog-close" ]; then
   exit 1
 fi
 
+preserve_relaunch_meta() {
+  awk -F= '
+    BEGIN {
+      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend external_ref herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      for (i in keys) owned[keys[i]] = 1
+    }
+    !($1 in owned)
+  ' "$RELAUNCH_META"
+}
+
 # --- nio-chat-agent dispatch --------------------------------------------------
 # The nio-chat runtime has no pane, worktree, or launch command: dispatch IS
 # sending the brief as the run's user message. This branch performs the whole
@@ -2161,7 +2171,11 @@ if [ "$HARNESS" = nio-chat-agent ]; then
     if [ "$RELAUNCH" -eq 1 ]; then
       preserve_relaunch_meta
     fi
-  } > "$SPAWN_META_TMP" || { echo "error: task record for $ID could not be prepared at $SPAWN_META_TMP" >&2; exit 1; }
+  } > "$SPAWN_META_TMP" || {
+    fm_niochat_teardown "$STATE" "$ID" >/dev/null 2>&1 || true
+    echo "error: task record for $ID could not be prepared at $SPAWN_META_TMP; the nio-chat run was cancelled and the channel cleared" >&2
+    exit 1
+  }
   if ! fm_backlog_atomic_transition publish "$SPAWN_META_TMP" "$STATE/$ID.meta" "task record" "$STATE"; then
     # Unwind the just-started run so no orphan holds the channel: the library
     # teardown cancels it, deletes a thread this dispatch created, and clears
@@ -2984,15 +2998,6 @@ else
   SPAWN_FRESH_COMMIT_PENDING=1
 fi
 SPAWN_META_PATH=$SPAWN_META_TMP
-preserve_relaunch_meta() {
-  awk -F= '
-    BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend external_ref herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
-      for (i in keys) owned[keys[i]] = 1
-    }
-    !($1 in owned)
-  ' "$RELAUNCH_META"
-}
 {
   echo "window=$META_WINDOW"
   echo "endpoint_task_id=$ID"

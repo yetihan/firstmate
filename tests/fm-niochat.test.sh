@@ -191,13 +191,13 @@ nio_record() {  # <id> <record-json>: write a run record through the library
   nio fm_niochat_record_write "$STATE" "$1" "$2" >/dev/null
 }
 
-nio_resp_repeat() {  # <method> <path> <n>: replay body n for pops n..n+3
+nio_resp_repeat() {  # <method> <path> <n>: replay body n for pops n..n+5
   # Reconcile probes then reads the question, and each answer attempt re-reads
-  # fresh options server-side, so one parked question costs up to four pops.
+  # fresh options server-side, so one parked question costs up to six pops.
   local dir i
   dir=$RESP/$(nio_key "$1" "$2")
   mkdir -p "$dir"
-  for i in $(( $3 + 1 )) $(( $3 + 2 )) $(( $3 + 3 )); do
+  for i in $(( $3 + 1 )) $(( $3 + 2 )) $(( $3 + 3 )) $(( $3 + 4 )) $(( $3 + 5 )); do
     cp "$dir/$3.out" "$dir/$i.out"
   done
   nio_next_floor "$dir" "$3"
@@ -634,6 +634,13 @@ EOF
   err=$(nio fm_niochat_answer "$STATE" "$DATA" t1 green 2>&1 >/dev/null)
   expect_code 1 $? "an unknown option must refuse"
   assert_contains "$err" 'red=Red;blue=Blue' "the refusal must list the open options"
+  # Only an exact option id validates: a suffix of a real id refuses too.
+  err=$(nio fm_niochat_answer "$STATE" "$DATA" t1 ed 2>&1 >/dev/null)
+  expect_code 1 $? "a suffix of an option id must refuse"
+  assert_contains "$err" 'red=Red;blue=Blue' "the suffix refusal must list the open options"
+  err=$(nio fm_niochat_answer "$STATE" "$DATA" t1 '' 2>&1 >/dev/null)
+  expect_code 1 $? "an empty choice must refuse"
+  assert_contains "$err" 'red=Red;blue=Blue' "the empty-choice refusal must list the open options"
   # The captain's answer resumes the thread and the run settles to a report.
   out=$(nio fm_niochat_answer "$STATE" "$DATA" t1 blue)
   assert_contains "$out" 'resumed: run run-2' "the answer must resume and report the run"
@@ -844,6 +851,77 @@ test_ring_delivers_and_acknowledges() {
   pass "ring: delivery is the acknowledgement, refusal keeps the record for re-ring"
 }
 
+# The typed plane (bin/fm-backend.sh's per-op dispatchers) must deliver through
+# the adapter exactly as the inbox ring does: the steer starts a run on the
+# recorded thread and the verdict follows the pane backends' empty-means-
+# delivered contract.
+test_adapter_send_text_delivers_on_the_typed_plane() {
+  local out rec
+  nio_case adapter-send
+  printf 'on\n' > "$CFG/nio-chat-worker"
+  nio_record t1 '{"task":"t1","thread":"th-1","thread_owner":"created","run_id":"run-1","status":"done","deadline":1,"started":1}'
+  nio_sse_completed run-2 th-1 acknowledged | nio_resp POST "$STREAM_PATH" 1
+  out=$(PATH="$FB:$PATH" FM_CONFIG_OVERRIDE="$CFG" FM_STATE_OVERRIDE="$STATE" \
+    FM_NIOCHAT_HANDSHAKE="$HS" FM_NIOCHAT_HTTP_TIMEOUT=10 \
+    FM_NIOCHAT_DISPATCH_GRACE=5 FM_NIOCHAT_RUN_TIMEOUT=600 \
+    FM_NIO_FAKE_LOG="$FAKE_LOG" FM_NIO_FAKE_RESP="$RESP" \
+    bash -c '. "$1"; fm_backend_niochat_send_text_submit fm-t1 "status ping" 1 0 0' \
+    _ "$ROOT/bin/backends/nio-chat.sh")
+  expect_code 0 $? "the adapter submit must succeed"
+  [ -z "$out" ] || fail "a delivered steer must print an empty verdict, got '$out'"
+  rec=$(cat "$STATE/t1.niochat-run")
+  jq -e '.status == "streaming" and .run_id == "run-2"' >/dev/null <<<"$rec" \
+    || fail "the steer must start a run on the recorded thread: $rec"
+  jq -e '.input.messages[0].content == "status ping"' "$(nio_body_file POST "$STREAM_PATH" 1)" >/dev/null \
+    || fail "the steer body must carry the text as the run's user message"
+  pass "adapter: typed-plane send_text delivers with an empty verdict"
+}
+
+# The relaunch lifecycle verb (bin/fm-control.sh execs fm-spawn --relaunch):
+# re-dispatch on the recorded thread through the spawn plane, publishing the
+# task record while preserving the prior meta's non-owned keys.
+test_spawn_relaunch_adopts_thread_and_preserves_meta() {
+  local out rec
+  nio_case relaunch
+  printf 'on\n' > "$CFG/nio-chat-worker"
+  printf 'claude\n' > "$CFG/crew-harness"
+  printf '%s\n' "$$" > "$STATE/.lock"
+  touch "$STATE/.last-watcher-beat"
+  mkdir -p "$DATA/t1"
+  printf 'TASK BRIEF: try again with warmer colors.\n' > "$DATA/t1/brief.md"
+  cat > "$STATE/t1.meta" <<'EOF'
+window=fm-t1
+endpoint_task_id=t1
+harness=nio-chat-agent
+kind=scout
+tasktmp=/tmp/fm-t1
+model=default
+effort=default
+spawn_gen=s0
+backend=nio-chat
+external_ref=th-1
+captain_note=keep me
+EOF
+  nio_record t1 '{"task":"t1","thread":"th-1","thread_owner":"adopted","run_id":"run-1","status":"done","deadline":1,"started":1}'
+  nio_capable 1
+  nio_sse_completed run-2 th-1 warmer | nio_resp POST "$STREAM_PATH" 1
+  out=$(PATH="$FB:$PATH" FM_ROOT_OVERRIDE='' FM_HOME="$CASE" \
+    FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CFG" \
+    FM_SPAWN_NO_GUARD=1 \
+    FM_NIOCHAT_HANDSHAKE="$HS" FM_NIOCHAT_HTTP_TIMEOUT=10 \
+    FM_NIOCHAT_DISPATCH_GRACE=5 FM_NIOCHAT_RUN_TIMEOUT=600 \
+    FM_NIO_FAKE_LOG="$FAKE_LOG" FM_NIO_FAKE_RESP="$RESP" \
+    "$ROOT/bin/fm-spawn.sh" t1 --relaunch --harness nio-chat-agent 2>&1)
+  expect_code 0 $? "the nio relaunch must succeed"
+  assert_contains "$out" 'thread=th-1' "the relaunch must report the adopted thread"
+  assert_grep 'captain_note=keep me' "$STATE/t1.meta" "relaunch must preserve non-owned meta keys"
+  assert_grep 'external_ref=th-1' "$STATE/t1.meta" "the relaunched record must keep the thread reference"
+  rec=$(cat "$STATE/t1.niochat-run")
+  jq -e '.status == "streaming" and .run_id == "run-2" and .thread_owner == "adopted"' >/dev/null <<<"$rec" \
+    || fail "the relaunch must restart a run on the adopted thread: $rec"
+  pass "spawn: relaunch re-dispatches on the recorded thread and preserves meta"
+}
+
 # --- run ---------------------------------------------------------------------
 
 test_gate_off_by_default_and_refusal_before_dial
@@ -865,3 +943,5 @@ test_timeout_cancels_and_fails
 test_cancel_stop_and_teardown_ownership
 test_run_state_fold
 test_ring_delivers_and_acknowledges
+test_adapter_send_text_delivers_on_the_typed_plane
+test_spawn_relaunch_adopts_thread_and_preserves_meta

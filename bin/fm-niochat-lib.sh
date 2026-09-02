@@ -809,7 +809,7 @@ fm_niochat_deliver_record() {  # <state-dir> <task-id> <record-path>
 # {"command":{"resume":"<option-id>"}} (verified end to end).
 fm_niochat_answer() {  # <state-dir> <data-dir> <id> <choice>
   local state=$1 data=$2 id=$3 choice=$4
-  local rec thread qid qline options tmp out run owner
+  local rec thread qid qline options tmp out run owner rest opt ok
   rec=$(fm_niochat_record_read "$state" "$id") || { echo "error: task $id has no nio-chat run record" >&2; return 1; }
   [ "$(fm_niochat_record_field "$rec" status)" = interrupted ] || { echo "error: task $id is not parked on an ask_user question (status $(fm_niochat_record_field "$rec" status))" >&2; return 1; }
   thread=$(fm_niochat_record_field "$rec" thread)
@@ -817,10 +817,20 @@ fm_niochat_answer() {  # <state-dir> <data-dir> <id> <choice>
   [ -n "$qline" ] || { echo "error: task $id's thread has no open interrupt to answer" >&2; return 1; }
   qid=$(printf '%s' "$qline" | cut -f1)
   options=$(printf '%s' "$qline" | cut -f3)
-  case ";${options//;/,}," in
-    *"$choice="*) ;;
-    *) echo "error: '$choice' is not one of the open question's options ($options)" >&2; return 1 ;;
-  esac
+  ok=
+  rest=$options
+  while :; do
+    opt=${rest%%;*}
+    if [ "${opt%%=*}" = "$choice" ]; then
+      ok=1
+      break
+    fi
+    if [ "$rest" = "$opt" ]; then
+      break
+    fi
+    rest=${rest#*;}
+  done
+  [ -n "$ok" ] || { echo "error: '$choice' is not one of the open question's options ($options)" >&2; return 1; }
   fm_niochat_channel_try_acquire "$state" "$id" || { echo "error: the nio-chat channel is held by task $(fm_niochat_channel_holder "$state")" >&2; return 1; }
   owner=$(fm_niochat_record_field "$rec" thread_owner)
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-niochat-$id.XXXXXX") || return 1

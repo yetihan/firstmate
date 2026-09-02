@@ -29,12 +29,6 @@ _fm_niochat_state_dir() {
   else printf '%s' "$(cd "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)/state"; fi
 }
 
-_fm_niochat_data_dir() {
-  if [ -n "${FM_DATA_OVERRIDE:-}" ]; then printf '%s' "$FM_DATA_OVERRIDE"
-  elif [ -n "${FM_HOME:-}" ]; then printf '%s' "$FM_HOME/data"
-  else printf '%s' "$(cd "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)/data"; fi
-}
-
 fm_backend_niochat_tool_check() {
   command -v jq >/dev/null 2>&1 || { echo "error: backend=nio-chat selected but 'jq' is not installed" >&2; return 1; }
   command -v curl >/dev/null 2>&1 || { echo "error: backend=nio-chat selected but 'curl' is not installed" >&2; return 1; }
@@ -89,7 +83,7 @@ fm_backend_niochat_send_text_submit() {  # <target> <text> <retries> <enter-slee
   local id text=$2 out
   fm_backend_niochat_tool_check || { printf 'send-failed'; return 0; }
   id=$(_fm_niochat_task_of_target "$1")
-  out=$(fm_niochat_steer_text "$(_fm_niochat_state_dir)" "$(_fm_niochat_data_dir)" "$id" "$text" 2>&1) || {
+  out=$(fm_niochat_steer_text "$(_fm_niochat_state_dir)" "$id" "$text" 2>&1) || {
     printf '%s' "$out"
     return 0
   }
