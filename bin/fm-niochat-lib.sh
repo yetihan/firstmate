@@ -11,8 +11,8 @@
 # enforces the run timeout, and writes the task's answer report.
 #
 # Protocol facts below are the empirically verified surface (five access
-# experiments, 2026-09-02; the full evidence record lives in
-# docs/nio-chat-agent-backend.md "Verification record"):
+# experiments, 2026-09-02; docs/nio-chat-agent-backend.md "Verified protocol
+# surface" records them, and the PR description carries the evidence):
 #   - Handshake ~/.nio-chat-desktop/agent-protocol.json carries
 #     {base_url, token, updated_at}; the token rotates per app launch, so it is
 #     re-read FRESH on every HTTP call. A wrong or stale token is HTTP 401.
@@ -59,9 +59,9 @@
 #                                  server-side history).
 #   state/<id>.niochat-pending/    queued steers, one numbered record each,
 #                                  FIFO; emptied as each is dispatched.
-#   state/<id>.niochat-wake-sent   the check script's dedupe marker: the last
-#                                  "<status> <run_id>" a check wake surfaced or
-#                                  reconcile acknowledged.
+#   state/<id>.niochat-wake-sent   the check script's dedupe marker: every
+#                                  acknowledged "<event> <run_id>" key, not
+#                                  just the latest.
 #   state/<id>.check.sh            the generated watcher check (registered
 #                                  through bin/fm-check-register.sh); prints one
 #                                  line when the run record reaches a state

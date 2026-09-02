@@ -15,7 +15,7 @@
 # the wake path instead). busy_state and agent_state read ONLY the local run
 # record - never the server - because the thread's server-side status stays
 # "idle" while a run streams (verified; docs/nio-chat-agent-backend.md
-# "Verification record").
+# "Verified protocol surface").
 
 # shellcheck source=bin/fm-niochat-lib.sh
 . "$(dirname -- "${BASH_SOURCE[0]}")/../fm-niochat-lib.sh"

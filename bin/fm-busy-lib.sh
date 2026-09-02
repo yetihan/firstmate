@@ -845,7 +845,8 @@ fm_busy_classify() {  # <backend> <target> <harness> <id> <state-dir> [tail40]
     nio-chat-agent*)
       # Semantic, on demand: fold this task's nio-chat run record. The agent
       # thread's server-side status stays "idle" while a run streams
-      # (verified; docs/nio-chat-agent-backend.md "Verification record"), so
+      # (verified; docs/nio-chat-agent-backend.md "Verified protocol
+      # surface"), so
       # the local run record is the only busy truth: busy = a run streaming,
       # settled = no run on the channel (a parked ask_user turn is settled,
       # not busy). No record or an unreadable one is unknown, never idle.

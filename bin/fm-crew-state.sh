@@ -146,8 +146,8 @@ LOG_VERB=$(status_line_verb "$LOG_LINE")
 # --- nio-chat-agent: the local run record is the truth ----------------------
 # A nio-chat task has no pane, no worktree, and no local agent process: its
 # endpoint is the agent thread, whose server-side status stays "idle" while a
-# run streams (verified; docs/nio-chat-agent-backend.md "Verification
-# record"). Firstmate's own run record is therefore the only busy truth. A
+# run streams (verified; docs/nio-chat-agent-backend.md "Verified protocol
+# surface"). Firstmate's own run record is therefore the only busy truth. A
 # streaming run is working; a settled record defers to the status log's last
 # line, which the nio-chat library appends at every transition (a blocked
 # ask_user question, a done answer, a failed cancel), so the ordinary verb

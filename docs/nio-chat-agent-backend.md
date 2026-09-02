@@ -71,6 +71,7 @@ Busy/idle: the server's own status read stays `idle` during streaming runs (veri
 No network call is made to classify a task.
 
 Wake path: the generated `state/<id>.check.sh` (registered through `bin/fm-check-register.sh`) does local reads only and prints `niochat <id> <event>` when the run record holds a state firstmate must act on - a settled run, a streaming run whose stream capture already holds the terminal lifecycle event (a finished run must not wait out its deadline), or a streaming run past its deadline.
+The wake marker holds the set of acknowledged event/run keys, so quieting one signal - a deferred question's interrupted wake - never silences the deadline's later retry nudge.
 Reconcile (`bin/fm-niochat.sh reconcile`) then finalizes it: a completed run's captured reply is written to `data/<id>/report.md` with a `done:` status line; an interrupted run's ask_user question is read from the thread history and surfaced as a `blocked:` status line with the answer command; a streaming run past its deadline is cancelled and failed.
 An unreachable server at finish time bumps the deadline by a bounded retry window instead of refiring the wake every poll.
 

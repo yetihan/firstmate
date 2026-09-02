@@ -26,6 +26,7 @@ Because the injected carrier and the recorded carrier are the same string, an ob
 The injection sits at the unconditional pre-launch export site, so it covers ship and scout spawns across `claude`, `codex`, `opencode`, `pi`, `pi-signed`, `grok`, `kimi`, `cursor`, and `muse`, plus Secondmate spawns across that same set except the deliberately crewmate-only `muse` adapter.
 This is the same coverage `GOTMPDIR` already has and requires no trace-specific `launch_template()` behavior.
 Ship and scout spawns reach that site on every spawn backend (`tmux`, `herdr`, `zellij`, `orca`, `cmux`); a Secondmate reaches it on every backend that accepts a Secondmate spawn (`tmux`, `herdr`, `zellij`), because `bin/fm-spawn.sh` rejects a Secondmate on `orca` and `cmux`.
+A `nio-chat-agent` dispatch is the one spawn that reaches no export site: it has no pane launch, so no carrier is resolved and its meta records no `traceparent=` ([`nio-chat-agent-backend.md`](nio-chat-agent-backend.md) owns that task shape).
 
 ### Remote Secondmate routes
 
