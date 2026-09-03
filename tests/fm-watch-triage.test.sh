@@ -1681,27 +1681,147 @@ test_permission_recovery_surfaces_preserved_status() {
   pass "permission recovery surfaces content from the unadvanced position"
 }
 
-test_terminal_stale_surfaced() {
-  local dir state fakebin out drain_out capture_file window key pane_hash sig pid
+# A stale pane on a plain done: report - the terminal path, where the raw last
+# line is itself captain-relevant - is a finished leftover, so it takes the
+# finished cadence: silent while the finish is fresh (the finish itself already
+# woke firstmate through the status signal path), exactly one cleanup recheck
+# once the cadence crosses, never a wake per distinct pane hash.
+test_terminal_done_stale_absorbs_on_finished_cadence() {
+  local dir state fakebin out drain_out capture_file window key pane_hash sig pid statusf
   dir=$(make_case terminal-stale); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
-  window="test:fm-done"
+  window="test:fm-done"; statusf="$state/done.status"
   printf 'finished, awaiting review' > "$capture_file"
   printf 'window=%s\nkind=ship\n' "$window" > "$state/done.meta"
-  printf 'done: PR https://example.test/pr/3\n' > "$state/done.status"
-  sig=$(seen_sig "$state/done.status"); printf '%s' "$sig" > "$state/.seen-done_status"
+  printf 'done: PR https://example.test/pr/3\n' > "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-done_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "finished, awaiting review")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
   printf '1\n' > "$state/.count-$key"
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · settled'
+
+  # Phase A: a fresh finish absorbs silently on the terminal path too.
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
-    FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=100 \
+    FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
-  wait_for_exit "$pid" 100 || fail "watcher did not exit for a stale pane on a terminal status"
-  grep -Fx "stale: $window" "$out" >/dev/null || fail "watcher did not print the terminal stale wake"
-  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the terminal stale failed"
-  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "terminal stale was not queued"
-  pass "a stale pane sitting on a terminal status is surfaced (queue + exit)"
+  if ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"; fail "a freshly finished terminal leftover woke firstmate (should absorb): $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || fail "a fresh terminal finished status printed a wake reason: $(cat "$out")"
+  [ ! -s "$state/.wake-queue" ] || fail "a fresh terminal finished status enqueued a wake"
+  [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$pane_hash" ] \
+    || fail "stale suppressor not advanced on the terminal finished absorb"
+  [ ! -e "$state/.stale-since-$key" ] || fail "the terminal finished absorb armed a wedge timer"
+  [ ! -e "$state/.wedge-escalations-$key" ] || fail "the terminal finished absorb climbed the wedge ladder"
+  reap "$pid"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the intentional phase-A watcher stop"
+
+  # Phase B: the finish ages past the cadence while the leftover pane's hash
+  # churns (a ticking footer), so the next classification is a first sight
+  # again; exactly one cleanup recheck fires, finished-labeled.
+  set_mtime $(( $(date +%s) - 500 )) "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-done_status"
+  printf 'finished, awaiting review (tick 2)' > "$capture_file"
+  printf '%s' "$(hash_text "finished, awaiting review (tick 2)")" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=100 \
+    FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 100 || fail "an aged terminal finished status never re-surfaced for its cleanup recheck"
+  grep -F "stale: $window (finished status, pane still open" "$out" >/dev/null \
+    || fail "the terminal finished re-surface did not carry the finished-status reason: $(cat "$out")"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the terminal finished re-surface failed"
+  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "the terminal finished re-surface was not queued"
+  unset FM_FAKE_CREW_STATE
+  pass "a terminal done: stale absorbs on the finished cadence and is rechecked once when aged"
+}
+
+# The finished cadence owns only done:/failed: reports. A live terminal verb -
+# needs-decision is the crew stopping the line for the captain - still surfaces
+# at once, never waits out a cadence.
+test_terminal_live_verb_stale_surfaces() {
+  local dir state fakebin out drain_out capture_file window key pane_hash sig pid
+  dir=$(make_case terminal-live); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
+  window="test:fm-ask"
+  printf 'idle, waiting for the captain' > "$capture_file"
+  printf 'window=%s\nkind=ship\n' "$window" > "$state/ask.meta"
+  printf 'needs-decision [key=ship]: merge or hold\n' > "$state/ask.status"
+  sig=$(seen_sig "$state/ask.status"); printf '%s' "$sig" > "$state/.seen-ask_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle, waiting for the captain")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · no run, no busy pane'
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=999999 \
+    FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 100 || fail "watcher did not exit for a stale pane on a live terminal ask"
+  grep -Fx "stale: $window" "$out" >/dev/null || fail "watcher did not print the live-verb stale wake"
+  [ ! -e "$state/.stale-since-$key" ] || fail "a live terminal ask armed a wedge timer instead of surfacing"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the live-verb stale failed"
+  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "the live-verb stale wake was not queued"
+  unset FM_FAKE_CREW_STATE
+  pass "a stale pane on a live terminal verb still surfaces immediately (queue + exit)"
+}
+
+# An attended idle finished pane whose footer churns must not wake once per
+# distinct hash: each new hash is classified stale on first sight, and every
+# classification lands on the finished cadence scoped to the one standing
+# declaration, so the whole churn stretch stays silent. Each round is a fresh
+# watcher on a new hash - the exact re-arm loop a per-hash one-shot rode in the
+# live incident - so a round's silence is the contract under test, not a
+# vacuous stay-alive.
+test_terminal_finished_pane_churning_hash_stays_absorbed() {
+  local dir state fakebin out drain_out capture_file window key sig pid statusf round pane_hash
+  dir=$(make_case terminal-finished-churn); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
+  window="test:fm-done-churn"; statusf="$state/done-churn.status"
+  printf 'window=%s\nkind=ship\n' "$window" > "$state/done-churn.meta"
+  printf 'done: PR https://example.test/pr/4 merged\n' > "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-done-churn_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  round=1
+  while [ "$round" -le 4 ]; do
+    # A slow-ticking footer: the pane text moves to a new token each round, so
+    # the round's first stale classification is a first sight of a new hash.
+    printf 'idle, awaiting cleanup (tick %d)' "$round" > "$capture_file"
+    pane_hash=$(hash_text "idle, awaiting cleanup (tick $round)")
+    rm -f "$state/.stale-$key" "$state/.stale-since-$key" "$state/.wedge-escalations-$key"
+    printf '%s' "$pane_hash" > "$state/.hash-$key"
+    printf '1\n' > "$state/.count-$key"
+    : > "$out"
+    PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+      FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+      FM_FAKE_CREW_STATE='state: unknown · source: none · settled' \
+      FM_PAUSE_RESURFACE_SECS=999999 FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+      FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+    pid=$!
+    # Two full poll cycles: the changed hash resets the stale count, so the
+    # first-sight classification happens on the third poll of the round.
+    wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "round $round woke firstmate for a churny finished leftover pane: $(cat "$out")"; }
+    wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "round $round exited mid-cycle on a churny finished leftover pane: $(cat "$out")"; }
+    [ ! -s "$out" ] || fail "round $round printed a wake for a churny finished pane: $(cat "$out")"
+    [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$pane_hash" ] \
+      || fail "round $round never absorbed its own distinct hash: '$(cat "$state/.stale-$key" 2>/dev/null || true)'"
+    [ ! -e "$state/.stale-since-$key" ] || fail "round $round armed a wedge timer on a finished pane"
+    [ ! -e "$state/.wedge-escalations-$key" ] || fail "round $round climbed the wedge ladder on a finished pane"
+    reap "$pid"
+    ack_stopped_cycle "$state" || fail "could not acknowledge the intentional round $round stop"
+    round=$((round + 1))
+  done
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || true
+  grep "$(printf '\tstale\t')" "$drain_out" >/dev/null \
+    && fail "the silent rounds still queued a stale row for the churny finished pane: $(cat "$drain_out")"
+  pass "an attended finished leftover pane absorbs across hash churn instead of waking once per hash"
 }
 
 # --- stale pane, STALE terminal status overridden by an active run: absorbed ---
@@ -3714,9 +3834,9 @@ test_timer_repair_drops_a_finished_write_deferral_chain() {
   pass "an idle-window timer repair drops a finished write-deferral chain, so the next deferral gets a fresh re-surface window"
 }
 
-# The same chain must not outlive either first-sight path through a captain-relevant
-# status line, because both also open a new idle window: the provably-working absorb
-# and the plain surface.
+# The same chain must not outlive any first-sight path through a captain-relevant
+# status line, because all of them also open a new idle window: the provably-working
+# absorb, the finished-cadence absorb, and the plain surface.
 test_terminal_first_sight_drops_a_finished_write_deferral_chain() {
   local dir state fakebin out capture_file window key pane_hash sig pid wt back
   dir=$(make_case wedge-write-chain-first-sight); state="$dir/state"; fakebin="$dir/fakebin"
@@ -3754,8 +3874,10 @@ test_terminal_first_sight_drops_a_finished_write_deferral_chain() {
   reap "$pid"
   ack_stopped_cycle "$state" || fail "could not acknowledge the intentional first-sight absorb stop"
 
-  # Same pane, first sight again, but nothing overrides the status line now, so it
+  # Same pane, first sight again on a live terminal verb nothing overrides, so it
   # surfaces. That path drops the idle-window timer, so it must drop the chain too.
+  printf 'needs-decision [key=validate]: waiting on the captain\n' > "$state/chain-first.status"
+  sig=$(seen_sig "$state/chain-first.status"); printf '%s' "$sig" > "$state/.seen-chain-first_status"
   rm -f "$state/.stale-$key" "$state/.stale-since-$key"
   printf '1\n' > "$state/.count-$key"
   : > "$state/.writing-since-$key"
@@ -3767,12 +3889,38 @@ test_terminal_first_sight_drops_a_finished_write_deferral_chain() {
     FM_STALE_ESCALATE_SECS=999 FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
-  wait_for_exit "$pid" 100 || fail "a first-sight captain-relevant status was not surfaced"
+  wait_for_exit "$pid" 100 || fail "a first-sight live terminal ask was not surfaced"
   grep -F "stale: $window" "$out" >/dev/null || fail "the first-sight surface did not print a stale wake"
   [ ! -e "$state/.writing-since-$key" ] \
     || fail "the first-sight surface kept a finished write-deferral chain"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the intentional surface stop"
+
+  # Same pane, first sight on a plain done: report with nothing overriding it: the
+  # finished-cadence absorb owns the pane now, and it drops the chain with the same
+  # idle-window reset.
+  printf 'done: implementation complete, ready to validate\n' > "$state/chain-first.status"
+  sig=$(seen_sig "$state/chain-first.status"); printf '%s' "$sig" > "$state/.seen-chain-first_status"
+  rm -f "$state/.stale-$key" "$state/.stale-since-$key"
+  printf '1\n' > "$state/.count-$key"
+  : > "$state/.writing-since-$key"
+  set_mtime "$back" "$state/.writing-since-$key"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_STALE_ESCALATE_SECS=999 FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"; fail "a first-sight done: report woke firstmate instead of absorbing: $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || fail "the finished first-sight absorb printed a wake reason: $(cat "$out")"
+  [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$pane_hash" ] \
+    || { reap "$pid"; fail "the finished first-sight absorb did not advance the stale suppressor"; }
+  [ ! -e "$state/.writing-since-$key" ] \
+    || { reap "$pid"; fail "the finished first-sight absorb kept a finished write-deferral chain"; }
+  reap "$pid"
   unset FM_FAKE_CREW_STATE
-  pass "both first-sight paths through a captain-relevant status drop a finished write-deferral chain with the idle window"
+  pass "every first-sight path through a captain-relevant status drops a finished write-deferral chain with the idle window"
 }
 
 # --- triage debug log stays size capped -------------------------------------
@@ -4321,7 +4469,9 @@ test_release_completion_survives_a_later_routine_append
 test_routine_appends_after_a_classified_event_stay_absorbed
 test_unreadable_status_reports_once_per_file_state
 test_permission_recovery_surfaces_preserved_status
-test_terminal_stale_surfaced
+test_terminal_done_stale_absorbs_on_finished_cadence
+test_terminal_live_verb_stale_surfaces
+test_terminal_finished_pane_churning_hash_stays_absorbed
 test_stale_terminal_status_overridden_by_active_run
 test_nonterminal_stale_provably_working_absorbed_then_escalated
 test_wedge_escalation_marks_demand_deep_inspection_after_threshold

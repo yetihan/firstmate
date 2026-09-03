@@ -894,23 +894,28 @@ handle_paused_stale() {  # <window> <task> <hash>
 # Absorb a stale pane whose task already reported a finish (crew_status_is_finished:
 # the status log's effective line is done or failed, keyed decision verbs skipped by
 # the fold), and re-surface it once every PAUSE_RESURFACE_SECS so a leftover pane
-# cannot rot invisibly. Reached only from the non-terminal stale path - the raw last
+# cannot rot invisibly. Reached from the non-terminal stale path - the raw last
 # line is not captain-relevant (a trailing `resolved` answer is the usual shape) -
-# because the terminal path above already surfaces a plain captain-relevant leftover
-# once and then leaves each hash alone. Without this absorber the finished pane rode
-# the non-terminal wedge ladder: surfaced once, then wedge_timer_check re-alarmed it
-# every STALE_ESCALATE_SECS for as long as its idle pane sat open, after the task had
-# already finished and its decision had already been answered.
+# and from the terminal stale path's own done:/failed: tail: a captain-relevant
+# line that reports a finish is a leftover pane too, so it takes this cadence
+# instead of waking once per distinct pane hash. Without this absorber the
+# finished pane rode the wedge ladder: surfaced once, then wedge_timer_check
+# re-alarmed it every STALE_ESCALATE_SECS for as long as its idle pane sat open,
+# after the task had already finished and its decision had already been answered.
 #
-# Called only after pause_state_class did not find provably working crew, so a
-# validating crew under a stale log leftover keeps the 2026-07 provably-working
-# override upstream of this absorber, exactly as the terminal path keeps it. It must
-# stay cheap on repeat polls: it NEVER re-reads crew state, and it clears the wedge
-# timer and escalation count so the ladder this absorber replaces cannot resume by
-# accident. The re-surface is the shared resurface_absorbed cadence, throttled by
-# this window's own .finished-resurfaced-<key> marker and scoped to the status
-# declaration, so a resumed working line (a new declaration) drops the pane off this
-# absorber immediately, and a fresh finish self-corrects the scope mismatch.
+# Called only after the crew state did not prove work, so a validating crew under
+# a stale log leftover keeps the 2026-07 provably-working override upstream of
+# this absorber, on both paths into it. It must stay cheap on repeat polls: it
+# NEVER re-reads crew state, and it clears the wedge timer and escalation count
+# so the ladder this absorber replaces cannot resume by accident. The re-surface
+# is the shared resurface_absorbed cadence, throttled by this window's own
+# .finished-resurfaced-<key> marker and scoped to the status declaration, so a
+# resumed working line (a new declaration) drops the pane off this absorber
+# immediately, and a fresh finish self-corrects the scope mismatch. The
+# declaration is also recorded in this window's .finished-<key> marker, so a
+# repeat poll whose recorded scope still matches the status signature re-enters
+# this cadence on the stat alone, without re-running the whole-file decision
+# fold that decided it.
 handle_finished_stale() {  # <window> <task> <hash>
   local win=$1 task=$2 h=$3 key statusf mtime age declaration
   key=$(window_key "$win")
@@ -922,6 +927,7 @@ handle_finished_stale() {  # <window> <task> <hash>
   case "$mtime" in ''|*[!0-9]*) mtime=$(date +%s) ;; esac
   age=$(( $(date +%s) - mtime ))
   declaration="declared:$(fm_wake_signal_sig "$statusf" || true)"
+  printf '%s' "$declaration" > "$STATE/.finished-$key"
   resurface_absorbed "$win" "$STATE/.finished-resurfaced-$key" "$age" \
     "stale: $win (finished status, pane still open ${age}s; confirm the finished task is cleaned up)" \
     "$declaration"
@@ -1944,17 +1950,17 @@ EOF
           # still churns its hash (a clock, a token counter), and a hash-keyed
           # one-shot would re-wake the daemon on every tick for a task that
           # already reported its finish and had its decision answered.
-          if crew_status_is_finished "$STATE/$task.status"; then
-            finished_declared="declared:$(fm_wake_signal_sig "$STATE/$task.status" || true)"
-            if [ "$(cat "$sf" 2>/dev/null || true)" != "$finished_declared" ]; then
+          finished_declared="declared:$(fm_wake_signal_sig "$STATE/$task.status" || true)"
+          if [ "$(cat "$sf" 2>/dev/null || true)" != "$finished_declared" ]; then
+            if crew_status_is_finished "$STATE/$task.status"; then
               fm_wake_append stale "$w" "stale: $w" || exit 1
               printf '%s' "$finished_declared" > "$sf"
               wake "stale: $w"
+            elif [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
+              fm_wake_append stale "$w" "stale: $w" || exit 1
+              printf '%s' "$h" > "$sf"
+              wake "stale: $w"
             fi
-          elif [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
-            fm_wake_append stale "$w" "stale: $w" || exit 1
-            printf '%s' "$h" > "$sf"
-            wake "stale: $w"
           fi
         elif stale_is_terminal "$w" "$STATE"; then
           # The log's last line is captain-relevant - but that alone is not
@@ -1977,6 +1983,8 @@ EOF
               date +%s > "$ssf"
               clear_write_tracking "$key"
               triage_log "absorbed stale (provably working, overriding a stale captain-relevant status): $w"
+            elif crew_status_is_finished "$STATE/$task.status"; then
+              handle_finished_stale "$w" "$task" "$h"
             else
               fm_wake_append stale "$w" "stale: $w" || exit 1
               printf '%s' "$h" > "$sf"
@@ -1997,6 +2005,8 @@ EOF
             # without re-reading the crew state every poll, and without
             # letting the still-captain-relevant log line re-surface it.
             wedge_timer_check "$w" "$ssf" "stale (overridden terminal status)" "$ewf" "$task"
+          elif [ "$(cat "$STATE/.finished-$key" 2>/dev/null || true)" = "declared:$(fm_wake_signal_sig "$STATE/$task.status" || true)" ]; then
+            handle_finished_stale "$w" "$task" "$h"
           fi
           # else: already surfaced as genuinely terminal on a prior poll of
           # this same hash - nothing left to do (matches the original,
@@ -2060,7 +2070,7 @@ EOF
               # working arm above absorbed this same hash as provably working
               # under the finished leftover (2026-07: the log alone is not
               # proof of done, and a frozen run under it must still escalate).
-              if [ ! -e "$ssf" ] && crew_status_is_finished "$STATE/$task.status"; then
+              if [ ! -e "$ssf" ] && { [ "$(cat "$STATE/.finished-$key" 2>/dev/null || true)" = "declared:$(fm_wake_signal_sig "$STATE/$task.status" || true)" ] || crew_status_is_finished "$STATE/$task.status"; }; then
                 handle_finished_stale "$w" "$task" "$h"
               else
                 wedge_timer_check "$w" "$ssf" "non-terminal stale" "$ewf" "$task"

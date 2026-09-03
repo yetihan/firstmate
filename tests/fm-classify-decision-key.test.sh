@@ -458,7 +458,49 @@ EOF
   pass "crew_status_is_finished matches done and failed reports only"
 }
 
+# A torn final append - a decision ask written without its closing newline - is
+# still the log's newest line: the fold's read loop honors it, and the walk must
+# agree instead of dropping it and reporting the finish underneath, which would
+# put an interrupted ask on the watcher's finished cadence instead of surfacing
+# its wait.
+test_last_state_status_line_honors_a_torn_final_line() {
+  local dir f expected_open
+  dir=$(case_dir torn-final)
+  f="$dir/a.status"
+  printf 'working: mid run\ndone: local-ready on fm/branch\nneeds-decision [key=open-q]: please answer' > "$f"
+  expected_open=$(printf 'open-q\tneeds-decision\tplease answer\n')
+  [ "$(status_open_decisions "$f")" = "$expected_open" ] \
+    || fail "the fold dropped a torn final ask: '$(status_open_decisions "$f")'"
+  [ "$(last_state_status_line "$f")" = "needs-decision [key=open-q]: please answer" ] \
+    || fail "the walk dropped a torn final ask: '$(last_state_status_line "$f")'"
+  if crew_status_is_finished "$f"; then
+    fail "a torn open ask over a done report read finished"
+  fi
+  pass "a torn final line is honored exactly like the fold honors it"
+}
+
+# A reserved-key line whose note does not speak the namespace vocabulary folds
+# as ordinary status (the ownership rule _fm_decision_key_transition_allowed
+# states), so the walk must report it as state too instead of skipping it as a
+# closed decision and exposing an older report underneath.
+test_last_state_status_line_reports_reserved_key_lines_as_state() {
+  local dir f
+  dir=$(case_dir reserved-impostor)
+  f="$dir/a.status"
+  printf 'working: mid run\ndone: local-ready on fm/branch\nneeds-decision [key=pending-reply-abc]: hand-written ask' > "$f"
+  [ -z "$(status_open_decisions "$f")" ] \
+    || fail "an impostor reserved-key ask opened a decision: '$(status_open_decisions "$f")'"
+  [ "$(last_state_status_line "$f")" = "needs-decision [key=pending-reply-abc]: hand-written ask" ] \
+    || fail "a reserved-key ask without the owner vocabulary was skipped: '$(last_state_status_line "$f")'"
+  if crew_status_is_finished "$f"; then
+    fail "a reserved-key impostor ask over a done report read finished"
+  fi
+  pass "a reserved-key line without the owner vocabulary reports as ordinary state"
+}
+
 test_last_state_status_line_skips_decision_verbs_not_state
 test_last_state_status_line_reports_open_waits_as_state
 test_last_state_status_line_plain_and_empty_inputs
 test_crew_status_is_finished_matches_reports_only
+test_last_state_status_line_honors_a_torn_final_line
+test_last_state_status_line_reports_reserved_key_lines_as_state

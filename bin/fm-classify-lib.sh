@@ -499,8 +499,10 @@ EOF
 # and masks the finish. Walking backward from the end, the keyed verbs are
 # skipped exactly per the status_open_decisions fold above: `resolved` and the
 # captain-held transfer never state state, and a needs-decision or blocked line
-# is skipped only once its key no longer appears in the whole file's open set -
-# a wait that is still open IS the crew's current state and stops the walk.
+# is skipped only when the fold does not hold it open - its key no longer in
+# the whole file's open set, or a reserved key whose note lacks the owner
+# vocabulary and therefore folds as ordinary status. A wait that is still
+# open IS the crew's current state and stops the walk.
 # Every other line reports state and stops the walk; a log holding nothing but
 # keyed transitions prints nothing. The skip rule itself lives only in this
 # function and in the fold it reads; callers consume the printed line.
@@ -520,7 +522,7 @@ last_state_status_line() {  # <status-file> -> effective state line, or empty
       *) printf '%s\n' "$line"; return 0 ;;
     esac
   fi
-  while IFS= read -r line; do
+  while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in *[![:space:]]*) ;; *) continue ;; esac
     lines+=("$line")
   done < "$f"
@@ -537,7 +539,8 @@ last_state_status_line() {  # <status-file> -> effective state line, or empty
         key=$(_fm_decision_key "$line") || key=''
         # A line whose key token is not a valid slug never opened a decision,
         # so it still reports its wait as plain state.
-        if [ -z "$key" ] || _fm_open_set_has "$open" "$key"; then
+        if [ -z "$key" ] || _fm_open_set_has "$open" "$key" \
+          || ! _fm_decision_key_transition_allowed "$key" "$(status_line_note "$line")"; then
           printf '%s\n' "$line"
           return 0
         fi
