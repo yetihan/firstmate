@@ -12,7 +12,7 @@ $ bin/fm-task-dashboard.sh groups   # print the classification with reasons
 
 The page lands at `data/dashboard.html` in this home: local, gitignored, mode 0600.
 It is a single self-contained HTML file - inline CSS and JavaScript, system fonts, no external requests of any kind - so it opens standalone and no task content ever leaves the machine.
-Regeneration is wholesale and deterministic: rendering twice over an unchanged home produces byte-identical output, and every render re-reads current state rather than editing the old page in place.
+Regeneration is wholesale and deterministic: two renders are byte-identical once the snapshot's generation timestamp is pinned (`FM_SNAPSHOT_NOW`) and home files are unchanged, and every render re-reads current state rather than editing the old page in place.
 
 ## Automatic grouping
 
@@ -20,7 +20,7 @@ Every task is classified along five dimensions, and the page switches between th
 
 - 仓库 (repo): the record's `(repo: ...)` field; unmarked rows group under 未标仓库.
 - 类型 (kind): the record's `(kind: ...)` field.
-- 状态 (status): done, in flight with a live endpoint, in flight without one, held for the captain, held otherwise, queued and blocked, queued and ready, or a free-form backlog line.
+- 状态 (status): done, in flight with a live endpoint, in flight without one, waiting on the captain (held for it, or queued and captain-actionable), held otherwise, queued and blocked, queued and ready, or a free-form backlog line.
 - 时段 (era): the month of the anchor date - the completion date for done rows, otherwise the since date.
 - 主题 (theme): the first configured keyword (case-insensitive) found in the task's title or body text; see below.
 
