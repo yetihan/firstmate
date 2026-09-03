@@ -44,7 +44,7 @@ The branch's role stays bounded exactly as the captain-approved architecture set
 Homes on any other primary harness never load this feature and are entirely unaffected.
 `AGENTS.md`'s `state/` inventory routes the branch's runtime files to their format and lifecycle owners.
 A captain-facing (verdict `captain`) branch outcome persists as one exact, sequence-keyed visible transcript entry and then opens one sequence-keyed processing turn on main, which stays open until main acknowledges that sequence through its `fm_branch_processed` tool.
-The branch prompt owns the unconditional explicit-request rule and the distinction between captain-facing, unsolicited routine, and unchanged-review outcomes.
+The branch prompt's "Verdict: routine or captain" section owns the distinction between captain-facing, unsolicited routine, and unchanged-review outcomes.
 The generated [Pi supervision protocol](supervision-protocols/pi.md) owns main's event ownership, acknowledgement duty, and conversational treatment for merged outcomes, while the persisted entry itself owns captain visibility.
 A no-change heartbeat outcome explicitly reported with `task=fleet` and `silent=true` is delivered silently with no rendered note, while every other routine outcome still appends a rendered, sailboat-prefixed note.
 
@@ -93,7 +93,7 @@ When the default backend is selected and compatible `tasks-axi` is on `PATH`, fi
 When the automatic transition gate applies, dispatch and completion are not separate operator actions: each moves its work item inside the same run that creates or removes the task's record, so the ordinary successful path cannot leave the backlog and live task set out of sync ([`bin/fm-backlog-transition-lib.sh`](../bin/fm-backlog-transition-lib.sh)).
 Under that gate, dispatch accepts only an unheld, unblocked Queued or In flight item in this home; a missing, Done, held, or dependency-blocked item is refused before any endpoint or local copy is created.
 Completion refuses to report success until the item is closed, and session start reconciles this home's own books after an interrupted run.
-Automatic transitions address the configured `<data>/backlog.md` explicitly from the data directory's parent, keeping relocated backlog configuration, archives, and relative scout-report links together.
+Automatic transition mutations address the configured `<data>/backlog.md` explicitly from the data directory's parent, keeping relocated backlog configuration, archives, and relative scout-report links together.
 The gate does not apply to persistent secondmates, manual-backend homes, or homes without a backlog file, preserving their existing persistent-agent, manual, or ad-hoc lifecycle behavior.
 On an automatic-backend home with a backlog, missing or incompatible `tasks-axi`, an unresolvable configured data directory, or one containing a control byte fails lifecycle work before mutation.
 Secondmate handoffs bypass that routine-backend choice: `fm-backlog-handoff.sh` keeps only its own fleet-level validation, delegates the item move to `tasks-axi mv`, and requires a verified receiver wake after a new move becomes durable.
@@ -782,6 +782,28 @@ Each account, model and voice file above is read as its first line that is not b
 The two read files are parsed differently: `config/voice-read-scope` must hold the bare word and nothing but blank space around it, so a comment header there refuses instead of being skipped, while every line of `config/voice-read-deny` that is not blank and not a `#` comment is one more substring.
 `FM_VOICE_RELAY` and `FM_VOICE_PYTHON` belong to the laptop rather than to a home, so they have no config file: `bin/fm-voice-client.py` requires the relay path as a flag or that variable and carries no default path.
 
+## Task dashboard groups (config/dashboard-groups.json)
+
+`config/dashboard-groups.json` is an optional local, gitignored file that customizes the task dashboard ([`docs/dashboard.md`](dashboard.md)).
+This section is the single owner of its schema; `bin/fm-task-dashboard.sh` owns the classification rules, page mechanics, and its header documents them.
+
+```json
+{
+  "overrides": {
+    "<task-id>": { "group": "<group name>", "note": "<optional reason shown on the card>" }
+  },
+  "theme_keywords": [
+    { "keyword": "<case-insensitive substring>", "group": "<group name>" }
+  ]
+}
+```
+
+An `overrides` entry replaces that task's automatic group in every dimension, so a saved adjustment survives regeneration and rule changes; ids that no current task carries are disclosed on the page instead of being dropped.
+A `theme_keywords` entry groups any task whose title or body text contains the keyword, with the first match in list order winning.
+Both keys are optional and the file itself is optional: an absent file classifies purely automatically.
+A present file is validated fail-closed - unknown keys, empty group strings, or malformed keyword entries stop the render with the file named rather than being skipped.
+See [`docs/examples/dashboard-groups.json`](examples/dashboard-groups.json) for a starting point to copy into local `config/dashboard-groups.json`.
+
 ## Environment variables
 
 Runtime tuning via environment variables (defaults shown):
@@ -869,9 +891,9 @@ FM_SIGNAL_GRACE=30      # seconds to coalesce nearby status and turn-end signals
 FM_TURNEND_CHURN_ABSORB_SECS=900   # longest one endpoint's bare turn-ends may be deferred on pane-churn evidence alone; only consulted when config/turnend-churn-absorb is present
 FM_CAPTAIN_RE='done:|needs-decision:|blocked:|failed:|PR ready|checks green|ready in branch|merged'   # captain-relevant status regex; nonterminal progress verbs remain excluded even when their prose matches
 FM_CLASSIFY_PAUSED_VERB=paused     # leading status verb for a declared external wait; excluded from FM_CAPTAIN_RE and distinct from blocked
-FM_STALE_ESCALATE_SECS=240         # idle seconds before a provably-working stale pane escalates; stale panes whose crew is not provably working surface immediately unless they declare the pause verb
+FM_STALE_ESCALATE_SECS=240         # idle seconds before a provably-working stale pane escalates; stale panes whose crew is not provably working surface immediately unless admitted directly to the declared-wait cadence, while a live idle declared wait still surfaces once before that cadence bounds repeats
 FM_BUSY_TURN_MAX_SECS=3600         # maximum age of a busy pane's latest state/<id>.turn-ended marker, or its state/<id>.meta spawn record before any turn completes, before the same wedge escalation used for a provably-working non-busy stale takes over; inspection-only, never an automatic interrupt or restart; a declared external wait or verified captain-held transfer takes the FM_PAUSE_RESURFACE_SECS recheck below instead
-FM_PAUSE_RESURFACE_SECS=3600       # seconds before the watcher re-surfaces a declared external wait or verified captain-held transfer for a recheck, including a live busy pane past FM_BUSY_TURN_MAX_SECS; the away-mode daemon uses the same setting for a declared external wait or verified captain-held transfer, ageing its window against the crew's own latest status line rather than pane busy state
+FM_PAUSE_RESURFACE_SECS=3600       # seconds between bounded rechecks of a declared external wait or verified captain-held transfer, including a live idle pane after its first inconclusive stale wake and a live busy pane past FM_BUSY_TURN_MAX_SECS; the away-mode daemon uses the same setting, ageing its window against the crew's own latest status line rather than pane busy state
 FM_SECONDMATE_WAKE_STALL_SECS=60   # minimum age of the oldest valid foreign wake-queue row before an endpoint-recorded local secondmate produces one durable parent wake-loop-stall notification; zero or invalid values use 60
 FM_WEDGE_DEMAND_INSPECT_COUNT=3    # consecutive provably-working stale escalations on the same unchanged pane before demand-deep-inspection is added
 FM_WORKTREE_WRITE_PRUNE='.git node_modules .venv venv __pycache__ .mypy_cache .pytest_cache .ruff_cache .tox target dist build .next .cache vendor'   # directory names the wedge detector's task-worktree write probe skips; the default keeps .git out so a supervisor's own read-only git command can never look like crew progress; set it to the empty string to prune nothing, which widens the probe to the whole depth-bounded tree rather than disabling it
