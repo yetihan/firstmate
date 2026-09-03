@@ -492,6 +492,64 @@ EOF
   return 0
 }
 
+# The last status line that reports crew STATE rather than a keyed-decision
+# transition, which is what a state reader must see when decision verbs trail a
+# real event: a stream ending "done: X / resolved [key=a]: answered" still
+# reports a finished crew, but last_status_line reads only the `resolved` line
+# and masks the finish. Walking backward from the end, the keyed verbs are
+# skipped exactly per the status_open_decisions fold above: `resolved` and the
+# captain-held transfer never state state, and a needs-decision or blocked line
+# is skipped only once its key no longer appears in the whole file's open set -
+# a wait that is still open IS the crew's current state and stops the walk.
+# Every other line reports state and stops the walk; a log holding nothing but
+# keyed transitions prints nothing. The skip rule itself lives only in this
+# function and in the fold it reads; callers consume the printed line.
+last_state_status_line() {  # <status-file> -> effective state line, or empty
+  local f=$1 line verb key resolve held open i
+  local -a lines=()
+  [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || return 0
+  resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
+  held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
+  # Fast path: a last line that is not a keyed-decision verb already reports
+  # state, so the ordinary working/paused/done/failed tail costs no fold.
+  line=$(last_status_line "$f")
+  if [ -n "$line" ]; then
+    verb=$(status_line_verb "$line")
+    case "$verb" in
+      needs-decision|blocked|"$resolve"|"$held") ;;
+      *) printf '%s\n' "$line"; return 0 ;;
+    esac
+  fi
+  while IFS= read -r line; do
+    case "$line" in *[![:space:]]*) ;; *) continue ;; esac
+    lines+=("$line")
+  done < "$f"
+  [ "${#lines[@]}" -gt 0 ] || return 0
+  open=$(status_open_decisions "$f")
+  i=${#lines[@]}
+  while [ "$i" -gt 0 ]; do
+    i=$((i - 1))
+    line=${lines[$i]}
+    verb=$(status_line_verb "$line")
+    case "$verb" in
+      "$resolve"|"$held") continue ;;
+      needs-decision|blocked)
+        key=$(_fm_decision_key "$line") || key=''
+        # A line whose key token is not a valid slug never opened a decision,
+        # so it still reports its wait as plain state.
+        if [ -z "$key" ] || _fm_open_set_has "$open" "$key"; then
+          printf '%s\n' "$line"
+          return 0
+        fi
+        continue
+        ;;
+    esac
+    printf '%s\n' "$line"
+    return 0
+  done
+  return 0
+}
+
 # The verb that last moved <key> in a status stream, which is what tells a
 # consumer HOW the status side currently reads that key. Prints the opening verb
 # (needs-decision or blocked) while the key is still open, the closing verb
@@ -1891,4 +1949,23 @@ stale_is_terminal() {  # <window> <state>
   local win=$1 state=$2 last
   last=$(last_status_line "$state/$(window_to_task "$win" "$state").status")
   [ -n "$last" ] && status_is_captain_relevant "$last"
+}
+
+# 0 when the effective state line (last_state_status_line above) reports a
+# finished task: leading verb done or failed. Keyed decision verbs are skipped
+# by that walk, so a `resolved` answer landing after a done or failed report
+# does not put the task back on a supervisor's wedging path, while a resumed
+# working line drops it off this predicate. A still-open needs-decision or
+# blocked wait, a declared pause, and an unknown or empty log are all NOT a
+# finish; parked and paused panes keep their own cadences. done/failed are the
+# report verbs this fleet's status protocol defines, so a legacy bare line
+# without a leading verb never reads as finished here.
+crew_status_is_finished() {  # <status-file>
+  local line
+  line=$(last_state_status_line "$1")
+  [ -n "$line" ] || return 1
+  case "$(status_line_verb "$line")" in
+    done|failed) return 0 ;;
+    *) return 1 ;;
+  esac
 }

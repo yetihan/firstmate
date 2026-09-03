@@ -433,6 +433,15 @@ do_interrupt() {
   local proof cancel
   cancel=$(deliver_interrupt) || return $?
   proof=$(verify_interrupt_running) || return $?
+  # A verified interrupt ended the agent's current turn, and some harnesses
+  # fire no turn-end hook of their own on that path (Claude's Stop hook never
+  # runs after a manual interrupt), so the notification every turn-end
+  # normally lands must come from here: without it the turn-ended marker keeps
+  # aging from the interrupted turn's opening and the watcher re-alarms a
+  # healthy crew on its busy-turn bound. This touch is the wake notification
+  # only; it is not busy state, which interrupt never rewrites as proof of its
+  # own success.
+  touch "$STATE/$ID.turn-ended" 2>/dev/null || true
   printf '%s cancel=%s' "$proof" "$cancel"
 }
 

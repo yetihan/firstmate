@@ -338,3 +338,127 @@ EOF
 
 test_closing_verb_separates_resolution_from_durable_transfer
 test_closing_verb_tracks_the_last_transition_in_both_positions
+
+# last_state_status_line reports the log's EFFECTIVE state line: keyed decision
+# verbs are never state, so a `resolved`/`captain-held` answer landing after a
+# real report must not become the line every state reader sees (the wedge-alarm
+# fix's core predicate - a done-then-resolved task read its leftover pane as
+# non-terminal and rode the wedge ladder), and a still-open needs-decision or
+# blocked wait DOES report itself as the live state rather than an older report.
+test_last_state_status_line_skips_decision_verbs_not_state() {
+  local dir f
+  dir=$(case_dir effective-line)
+  f="$dir/a.status"
+  cat > "$f" <<'EOF'
+working: implemented the fix
+needs-decision [key=ship-now]: merge or hold
+resolved [key=ship-now]: answered: merge
+done: local-ready on fm/branch
+EOF
+  [ "$(last_state_status_line "$f")" = "done: local-ready on fm/branch" ] \
+    || fail "last state line was not the report: '$(last_state_status_line "$f")'"
+
+  # The answered decision sits under the report too - the walk must pass it.
+  printf 'resolved [key=cleanup]: answered: teardown done\n' >> "$f"
+  [ "$(last_state_status_line "$f")" = "done: local-ready on fm/branch" ] \
+    || fail "a trailing resolution masked the report: '$(last_state_status_line "$f")'"
+
+  # A captain-held close is just as much a decision verb.
+  printf 'captain-held [key=hold-2]: tracked by sample-call\n' >> "$f"
+  [ "$(last_state_status_line "$f")" = "done: local-ready on fm/branch" ] \
+    || fail "a trailing captain-held masked the report: '$(last_state_status_line "$f")'"
+  pass "last_state_status_line reports the newest state line under keyed decision verbs"
+}
+
+test_last_state_status_line_reports_open_waits_as_state() {
+  local dir f
+  dir=$(case_dir open-wait)
+  f="$dir/a.status"
+  cat > "$f" <<'EOF'
+done: first pass shipped
+needs-decision [key=second-pass]: proceed or stop
+EOF
+  [ "$(last_state_status_line "$f")" = "needs-decision [key=second-pass]: proceed or stop" ] \
+    || fail "an open decision did not report itself as state: '$(last_state_status_line "$f")'"
+
+  # Keyless asks fold to the default bucket and still report as state.
+  printf 'needs-decision: what about the docs\n' >> "$f"
+  [ "$(last_state_status_line "$f")" = "needs-decision: what about the docs" ] \
+    || fail "a keyless open ask did not report as state: '$(last_state_status_line "$f")'"
+
+  # Blocked is the same kind of live wait.
+  printf 'blocked [key=creds]: need a token\n' >> "$f"
+  [ "$(last_state_status_line "$f")" = "blocked [key=creds]: need a token" ] \
+    || fail "an open blocked wait did not report as state: '$(last_state_status_line "$f")'"
+  pass "last_state_status_line reports still-open waits as the live state"
+}
+
+test_last_state_status_line_plain_and_empty_inputs() {
+  local dir f
+  dir=$(case_dir plain)
+  f="$dir/a.status"
+  printf 'working: mid run\n' > "$f"
+  printf 'paused: waiting on CI until 18:00\n' >> "$f"
+  [ "$(last_state_status_line "$f")" = "paused: waiting on CI until 18:00" ] \
+    || fail "a plain paused line was not reported: '$(last_state_status_line "$f")'"
+
+  # Blank and absent inputs report nothing, never an error line.
+  : > "$dir/empty.status"
+  [ -z "$(last_state_status_line "$dir/empty.status")" ] \
+    || fail "an empty file reported a state line"
+  [ -z "$(last_state_status_line "$dir/absent.status")" ] \
+    || fail "an absent file reported a state line"
+
+  # A file holding only decision verbs has no state line to report.
+  printf 'resolved [key=x]: answered: yes\n' > "$dir/only-resolved.status"
+  [ -z "$(last_state_status_line "$dir/only-resolved.status")" ] \
+    || fail "a decision-only file reported a state line: '$(last_state_status_line "$dir/only-resolved.status")'"
+  pass "last_state_status_line handles plain lines, empty files, and decision-only logs"
+}
+
+# crew_status_is_finished is the watcher's finished-pane gate: done/failed under
+# any closed keyed verbs, never a wait, pause, or blank.
+test_crew_status_is_finished_matches_reports_only() {
+  local dir f
+  dir=$(case_dir finished)
+  f="$dir/done-resolved.status"
+  cat > "$f" <<'EOF'
+working: implemented the fix
+done: local-ready on fm/branch
+resolved [key=ship-now]: answered: merge
+EOF
+  crew_status_is_finished "$f" \
+    || fail "done under a resolved answer did not read finished"
+  [ "$(last_state_status_line "$f")" = "done: local-ready on fm/branch" ] \
+    || fail "the finished gate did not agree with the effective-line walk"
+
+  printf 'failed: tests red on fm/branch\n' > "$f"
+  printf 'resolved [key=retry]: answered: later\n' >> "$f"
+  crew_status_is_finished "$f" \
+    || fail "failed under a resolved answer did not read finished"
+
+  printf 'working: resumed after all\n' >> "$f"
+  if crew_status_is_finished "$f"; then
+    fail "a resumed working line still read finished"
+  fi
+
+  printf 'paused: waiting on a human reply\n' > "$dir/paused.status"
+  if crew_status_is_finished "$dir/paused.status"; then
+    fail "a declared pause read finished"
+  fi
+
+  printf 'needs-decision [key=open]: still waiting\n' > "$dir/waiting.status"
+  if crew_status_is_finished "$dir/waiting.status"; then
+    fail "an open decision read finished"
+  fi
+
+  if crew_status_is_finished "$dir/absent.status"; then
+    fail "an absent status file read finished"
+  fi
+  pass "crew_status_is_finished matches done and failed reports only"
+}
+
+test_last_state_status_line_skips_decision_verbs_not_state
+test_last_state_status_line_reports_open_waits_as_state
+test_last_state_status_line_plain_and_empty_inputs
+test_crew_status_is_finished_matches_reports_only

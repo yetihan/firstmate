@@ -113,11 +113,9 @@ fi
 
 # --- status log ------------------------------------------------------------
 
-# Last non-empty status line; fm-classify-lib.sh owns leading-verb normalization.
-log_last_line() {
-  [ -f "$LOG" ] || return 1
-  grep -v '^[[:space:]]*$' "$LOG" 2>/dev/null | tail -1
-}
+# The effective state line of the status log: last_state_status_line
+# (fm-classify-lib.sh) skips keyed-decision verbs per the durable decision fold,
+# so a `resolved` answer landing after a real report cannot mask it.
 # Map a status-log verb onto a canonical state for the fallback path. `paused` is
 # the deliberate-external-wait verb (fm-classify-lib.sh's FM_CLASSIFY_PAUSED_VERB):
 # a crew with no active run and an idle pane that declared a known external wait
@@ -138,7 +136,7 @@ map_log_state() {  # <line>
   esac
 }
 
-LOG_LINE=$(log_last_line || true)
+LOG_LINE=$(last_state_status_line "$LOG" || true)
 LOG_VERB=$(status_line_verb "$LOG_LINE")
 
 # --- remote secondmate: the true source is the remote endpoint ---------------
@@ -577,6 +575,19 @@ if [ "$HAVE_RUN" = 1 ]; then
           RUN_DETAIL="$RUN_DETAIL${SEP}status-log superseded (run $RUN_STATE)"
         fi
       fi
+      ;;
+  esac
+
+  # A terminal status-log verdict outranks a DISAGREEING terminal run-step label:
+  # the log's done/failed is the crew's own final report, and a stale run record
+  # reading `failed` under it masked a finished task's state and blocked its
+  # cleanup. The superseded run verdict stays in the detail so the disagreement
+  # remains visible; when both agree, the run-step keeps its richer detail.
+  LOG_TERMINAL=$(map_log_state "$LOG_LINE")
+  case "$RUN_STATE:$LOG_TERMINAL" in
+    done:failed|failed:done)
+      emit "$LOG_TERMINAL" status-log \
+        "$(status_line_note "$LOG_LINE")${SEP}run-step superseded (run $RUN_STATE: $RUN_DETAIL)"
       ;;
   esac
 
