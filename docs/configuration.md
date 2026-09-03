@@ -780,6 +780,28 @@ Each account, model and voice file above is read as its first line that is not b
 The two read files are parsed differently: `config/voice-read-scope` must hold the bare word and nothing but blank space around it, so a comment header there refuses instead of being skipped, while every line of `config/voice-read-deny` that is not blank and not a `#` comment is one more substring.
 `FM_VOICE_RELAY` and `FM_VOICE_PYTHON` belong to the laptop rather than to a home, so they have no config file: `bin/fm-voice-client.py` requires the relay path as a flag or that variable and carries no default path.
 
+## Task dashboard groups (config/dashboard-groups.json)
+
+`config/dashboard-groups.json` is an optional local, gitignored file that customizes the task dashboard ([`docs/dashboard.md`](dashboard.md)).
+This section is the single owner of its schema; `bin/fm-task-dashboard.sh` owns the classification rules, page mechanics, and its header documents them.
+
+```json
+{
+  "overrides": {
+    "<task-id>": { "group": "<group name>", "note": "<optional reason shown on the card>" }
+  },
+  "theme_keywords": [
+    { "keyword": "<case-insensitive substring>", "group": "<group name>" }
+  ]
+}
+```
+
+An `overrides` entry replaces that task's automatic group in every dimension, so a saved adjustment survives regeneration and rule changes; ids that no current task carries are disclosed on the page instead of being dropped.
+A `theme_keywords` entry groups any task whose title or body text contains the keyword, with the first match in list order winning.
+Both keys are optional and the file itself is optional: an absent file classifies purely automatically.
+A present file is validated fail-closed - unknown keys, empty group strings, or malformed keyword entries stop the render with the file named rather than being skipped.
+See [`docs/examples/dashboard-groups.json`](examples/dashboard-groups.json) for a starting point to copy into local `config/dashboard-groups.json`.
+
 ## Environment variables
 
 Runtime tuning via environment variables (defaults shown):
