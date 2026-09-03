@@ -98,11 +98,11 @@ usage() {
   ' "${BASH_SOURCE[0]}"
 }
 
-new_tmp() {
+new_tmp() {  # <var-name>
   local f
   f=$(mktemp "${TMPDIR:-/tmp}/fm-task-dashboard.XXXXXX") || fail "cannot create a temp file"
   TMP_FILES+=("$f")
-  printf '%s\n' "$f"
+  printf -v "$1" '%s' "$f"
 }
 
 # --- configuration ----------------------------------------------------------
@@ -316,32 +316,34 @@ validate_payload() {  # <payload-file>
   ' "$1" >/dev/null
 }
 
-payload_to_file() {
-  local snap cfg epochs_tsv epochs_json reports_tsv reports_json payload ids
+payload_to_file() {  # <result-var>
+  local dest=$1
+  local snap snap_err cfg epochs_tsv epochs_json reports_tsv reports_json payload_file ids
   [ -f "$SNAPSHOT" ] || fail "fleet snapshot helper is missing: $SNAPSHOT"
-  snap=$(new_tmp)
-  if ! "$SNAPSHOT" --json > "$snap" 2>"$snap.err"; then
-    sed 's/^/fm-fleet-snapshot: /' "$snap.err" >&2 || true
+  new_tmp snap
+  new_tmp snap_err
+  if ! "$SNAPSHOT" --json > "$snap" 2>"$snap_err"; then
+    sed 's/^/fm-fleet-snapshot: /' "$snap_err" >&2 || true
     fail "cannot read the fleet snapshot"
   fi
   cfg=$(load_config_json) || exit 1
 
-  epochs_tsv=$(new_tmp)
+  new_tmp epochs_tsv
   ids=$(jq -r '.backlog.records[] | select(.structured) | .id' "$snap")
   # shellcheck disable=SC2086  # task ids are slug-like tokens without spaces
   status_epochs_tsv $ids > "$epochs_tsv" || true
   epochs_json=$(jq -Rn 'reduce (inputs | select(length > 0) | split("\t")) as [$id, $epoch] ({}; .[$id] = ($epoch | tonumber))' < "$epochs_tsv")
 
-  reports_tsv=$(new_tmp)
+  new_tmp reports_tsv
   report_presence_tsv "$snap" > "$reports_tsv"
   reports_json=$(tsv_to_object 1 < "$reports_tsv")
 
-  payload=$(new_tmp)
+  new_tmp payload_file
   jq --argjson cfg "$cfg" --argjson reports "$reports_json" --argjson epochs "$epochs_json" \
-    "$PROJECT_JQ" "$snap" > "$payload" \
+    "$PROJECT_JQ" "$snap" > "$payload_file" \
     || fail "cannot project the snapshot into a dashboard payload"
-  validate_payload "$payload" || fail "dashboard payload does not satisfy $DASH_SCHEMA"
-  printf '%s\n' "$payload"
+  validate_payload "$payload_file" || fail "dashboard payload does not satisfy $DASH_SCHEMA"
+  printf -v "$dest" '%s' "$payload_file"
 }
 
 # --- page template ----------------------------------------------------------
@@ -908,8 +910,8 @@ FM_TASK_DASHBOARD_TEMPLATE
 command_render() {
   [ "$#" -eq 0 ] || { usage >&2; exit 2; }
   local payload json tmpl out tmp extracted
-  payload=$(payload_to_file)
-  tmpl=$(new_tmp)
+  payload_to_file payload
+  new_tmp tmpl
   template > "$tmpl" || fail "cannot produce the page template"
   out=$OUT
   json=$(jq -c . "$payload") || fail "cannot compact the dashboard payload"
@@ -965,7 +967,7 @@ command_groups() {
       *) fail "unknown groups argument: $arg (expected a dimension among: $DIMENSIONS, or --json)" ;;
     esac
   done
-  payload=$(payload_to_file)
+  payload_to_file payload
   if [ "$want_json" -eq 1 ]; then
     jq --arg dim "$dimension" '
       {schema, home, generated, dimension: $dim, overrides_stale,
