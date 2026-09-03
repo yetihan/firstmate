@@ -349,6 +349,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/nio-chat-agent-backend.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/orca-backend.md",
       "audience": "operator-current"
     },

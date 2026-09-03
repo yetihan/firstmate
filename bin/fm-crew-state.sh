@@ -107,7 +107,9 @@ REMOTE_HOST=$(meta_value remote_host)
 # A torn-down (or never-created) worktree has no current state to read. A
 # remote secondmate's recorded worktree is a path on ITS host, so the local
 # probe proves nothing for it - the remote arm below reads the true source.
-if [ -z "$REMOTE_HOST" ] && { [ -z "$WT" ] || [ ! -d "$WT" ]; }; then
+# A nio-chat-agent task records no worktree at all by design, so it skips
+# this probe; its dedicated branch below reads the run record instead.
+if [ -z "$REMOTE_HOST" ] && [ "$HARNESS" != nio-chat-agent ] && { [ -z "$WT" ] || [ ! -d "$WT" ]; }; then
   emit unknown none "worktree gone (torn down?)"
 fi
 
@@ -140,6 +142,48 @@ map_log_state() {  # <line>
 
 LOG_LINE=$(log_last_line || true)
 LOG_VERB=$(status_line_verb "$LOG_LINE")
+
+# --- nio-chat-agent: the local run record is the truth ----------------------
+# A nio-chat task has no pane, no worktree, and no local agent process: its
+# endpoint is the agent thread, whose server-side status stays "idle" while a
+# run streams (verified; docs/nio-chat-agent-backend.md "Verified protocol
+# surface"). Firstmate's own run record is therefore the only busy truth. A
+# streaming run is working; a settled record defers to the status log's last
+# line, which the nio-chat library appends at every transition (a blocked
+# ask_user question, a done answer, a failed cancel), so the ordinary verb
+# mapping below decides presentation.
+if [ "$HARNESS" = nio-chat-agent ]; then
+  # shellcheck source=bin/fm-niochat-lib.sh
+  . "$SCRIPT_DIR/fm-niochat-lib.sh"
+  NIO_REC=$(fm_niochat_record_read "$STATE" "$ID" 2>/dev/null || true)
+  if [ -z "$NIO_REC" ]; then
+    emit unknown none "no nio-chat run record for $ID"
+  fi
+  NIO_STATUS=$(printf '%s' "$NIO_REC" | jq -r '.status // empty' 2>/dev/null || true)
+  NIO_DETAIL="nio-chat thread $(printf '%s' "$NIO_REC" | jq -r '.thread // "?"' 2>/dev/null) run $(printf '%s' "$NIO_REC" | jq -r '.run_id // "?"' 2>/dev/null) ($NIO_STATUS)"
+  case "$NIO_STATUS" in
+    streaming)
+      emit working run-record "$NIO_DETAIL"
+      ;;
+    '')
+      emit unknown run-record "unreadable nio-chat run record for $ID"
+      ;;
+    *)
+      NIO_STATE=$(map_log_state "$LOG_LINE")
+      case "$NIO_STATE" in
+        unknown)
+          case "$NIO_STATUS" in
+            interrupted) NIO_STATE=blocked ;;
+            done) NIO_STATE="done" ;;
+            idle) NIO_STATE=parked ;;
+            *) NIO_STATE=failed ;;
+          esac
+          ;;
+      esac
+      emit "$NIO_STATE" run-record "$NIO_DETAIL"
+      ;;
+  esac
+fi
 
 # --- remote secondmate: the true source is the remote endpoint ---------------
 # A remote mate's recorded worktree and backend target live on its own host, so

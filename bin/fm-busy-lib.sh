@@ -177,11 +177,12 @@ fm_busy_current_gen() {  # <state-dir> <id>
 # fm_busy_sources_for_harness: the semantic sources trusted to classify a
 # task recorded with <harness>. One line, space-separated, possibly empty.
 # The firstmate-owned sources are appended for every converted adapter.
-# Grok and muse deliberately trust nothing: neither has a semantic WRITER, so
-# neither is armed, and both read their live source on demand in the classifier
-# (grok's rendered tail, muse's session log) rather than through a stored
-# record. Listing a source here without a writer that can clear it would seed a
-# busy record nothing could ever settle.
+# Grok, muse, and nio-chat-agent deliberately trust nothing: none has a
+# semantic WRITER, so none is armed, and each reads its live source on demand
+# in the classifier (grok's rendered tail, muse's session log, nio-chat's
+# local run record) rather than through a stored record. Listing a source
+# here without a writer that can clear it would seed a busy record nothing
+# could ever settle.
 fm_busy_sources_for_harness() {  # <harness>
   local adapter=
   case "${1:-}" in
@@ -841,6 +842,23 @@ fm_busy_classify() {  # <backend> <target> <harness> <id> <state-dir> [tail40]
   local backend=$1 target=$2 harness=$3 id=$4 state=$5 tail40=${6-}
   local out rc r_state r_source native log
   case "$harness" in
+    nio-chat-agent*)
+      # Semantic, on demand: fold this task's nio-chat run record. The agent
+      # thread's server-side status stays "idle" while a run streams
+      # (verified; docs/nio-chat-agent-backend.md "Verified protocol
+      # surface"), so
+      # the local run record is the only busy truth: busy = a run streaming,
+      # settled = no run on the channel (a parked ask_user turn is settled,
+      # not busy). No record or an unreadable one is unknown, never idle.
+      # shellcheck source=/dev/null
+      . "$(dirname -- "${BASH_SOURCE[0]}")/fm-niochat-lib.sh"
+      case "$(fm_niochat_run_state "$state" "$id" 2>/dev/null)" in
+        busy) printf 'busy run-record' ;;
+        settled) printf 'idle run-record' ;;
+        *) printf 'unknown run-record' ;;
+      esac
+      return 0
+      ;;
     kimi*)
       if ! fm_busy_kimi_verified; then
         printf 'unknown kimi-unverified'
