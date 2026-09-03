@@ -3500,6 +3500,111 @@ SH
   pass "away mode wakes the daemon once per declaration for a busy pane whose footer ticks on every capture"
 }
 
+# Away mode owns an idle finished leftover pane the same way it owns a busy
+# declared pause: the daemon is handed the PLAIN window identity once per
+# DECLARATION - the declared:<status signature> value the stale suppressor
+# records - never once per distinct pane hash, because an idle finished pane
+# still churns its hash on every tick. The whole-file fold that decides
+# "finished" runs only when the suppressor differs from both the standing
+# declaration and the current hash, so a stable already-surfaced pane never
+# re-runs it per poll, and a fresh declaration lands one new handoff.
+test_afk_finished_pane_hands_off_once_per_declaration() {
+  local dir state fakebin out drain_out capture_file window key sig pid statusf round pane_hash prev_hash declared
+  dir=$(make_case afk-finished-leftover); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
+  window="test:fm-afk-finished"; statusf="$state/afk-finished.status"
+  printf 'window=%s\nkind=ship\n' "$window" > "$state/afk-finished.meta"
+  printf 'done: PR https://example.test/pr/5 merged\n' > "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-afk-finished_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  date '+%s' > "$state/.afk"
+
+  # Phase 1: the first stale classification of a finished pane hands the daemon
+  # the plain identity once, and the suppressor records the declaration - not
+  # the pane hash - so the pinned value is the status signature itself.
+  printf 'idle, awaiting cleanup' > "$capture_file"
+  pane_hash=$(hash_text "idle, awaiting cleanup")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: unknown · source: none · settled' \
+    FM_PAUSE_RESURFACE_SECS=999999 FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 100 || fail "away mode never handed a finished leftover pane to the daemon"
+  grep -Fx "stale: $window" "$out" >/dev/null \
+    || fail "the away-mode finished handoff did not carry the plain window identity: $(cat "$out")"
+  declared="declared:$(status_observed_signature "$statusf")"
+  [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$declared" ] \
+    || fail "the away-mode finished handoff did not key its suppressor on the declaration: '$(cat "$state/.stale-$key" 2>/dev/null || true)'"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the away-mode finished handoff failed"
+  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "stale: $window" >/dev/null \
+    || fail "the away-mode finished handoff was not queued for the daemon"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the intentional phase-1 handoff stop"
+
+  # Phases 2-4: the same standing declaration while the pane's footer ticks to a
+  # new hash each round. Each round is a fresh watcher on a first sight of a new
+  # hash - the exact shape a hash-keyed one-shot re-fires on - and every one of
+  # them must stay silent under the declaration-keyed suppressor.
+  round=2
+  while [ "$round" -le 4 ]; do
+    prev_hash=$(cat "$state/.hash-$key" 2>/dev/null || true)
+    printf 'idle, awaiting cleanup (tick %d)' "$round" > "$capture_file"
+    pane_hash=$(hash_text "idle, awaiting cleanup (tick $round)")
+    [ "$pane_hash" != "$prev_hash" ] || fail "round $round reused the previous round's pane hash, so its silence proves nothing"
+    printf '%s' "$pane_hash" > "$state/.hash-$key"
+    printf '1\n' > "$state/.count-$key"
+    : > "$out"
+    PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+      FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+      FM_FAKE_CREW_STATE='state: unknown · source: none · settled' \
+      FM_PAUSE_RESURFACE_SECS=999999 FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+      FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+    pid=$!
+    wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "round $round re-woke the daemon for a churny finished pane: $(cat "$out")"; }
+    wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "round $round exited mid-cycle on a churny finished pane: $(cat "$out")"; }
+    [ ! -s "$out" ] || fail "round $round printed a wake for a churny finished pane: $(cat "$out")"
+    [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$declared" ] \
+      || fail "round $round let the suppressor drift off the standing declaration: '$(cat "$state/.stale-$key" 2>/dev/null || true)'"
+    [ "$(cat "$state/.hash-$key" 2>/dev/null || true)" = "$pane_hash" ] \
+      || fail "round $round never classified its own distinct hash"
+    [ ! -e "$state/.stale-since-$key" ] || fail "round $round armed a wedge timer on a finished pane"
+    [ ! -e "$state/.wedge-escalations-$key" ] || fail "round $round climbed the wedge ladder on a finished pane"
+    reap "$pid"
+    ack_stopped_cycle "$state" || fail "could not acknowledge the intentional round $round stop"
+    round=$((round + 1))
+  done
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || true
+  grep "$(printf '\tstale\t')" "$drain_out" >/dev/null \
+    && fail "the silent rounds still queued a stale row for the churny finished pane: $(cat "$drain_out")"
+
+  # Phase 5: a fresh done: declaration (a new status-file state) must land one
+  # new plain handoff keyed on the new declaration.
+  printf 'done: PR https://example.test/pr/6 merged\n' >> "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-afk-finished_status"
+  printf 'idle, awaiting cleanup (tick 9)' > "$capture_file"
+  pane_hash=$(hash_text "idle, awaiting cleanup (tick 9)")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_FAKE_CREW_STATE='state: unknown · source: none · settled' \
+    FM_PAUSE_RESURFACE_SECS=999999 FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 100 || fail "a fresh finished declaration never re-armed the away-mode handoff"
+  grep -Fx "stale: $window" "$out" >/dev/null \
+    || fail "the fresh-declaration handoff did not carry the plain window identity: $(cat "$out")"
+  [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" != "$declared" ] \
+    || fail "the fresh-declaration handoff kept the old declaration as its suppressor"
+  [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "declared:$(status_observed_signature "$statusf")" ] \
+    || fail "the fresh-declaration handoff did not key its suppressor on the new declaration: '$(cat "$state/.stale-$key" 2>/dev/null || true)'"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the intentional phase-5 handoff stop"
+  pass "away mode hands a finished leftover pane to the daemon once per declaration, never per hash"
+}
+
 # Behavioral proof that the production default (no FM_BUSY_TURN_MAX_SECS override
 # anywhere in this env) is 3600s: a completed turn 5 minutes old must not start a
 # wedge timer, while one 66 minutes old must - bracketing the default around 3600
@@ -4486,6 +4591,7 @@ test_busy_pane_default_turn_age_bound_is_3600s
 test_busy_declared_pause_is_rechecked_not_wedge_escalated
 test_afk_busy_declared_pause_hands_off_plain_stale
 test_afk_busy_declared_pause_ticking_pane_hands_off_once
+test_afk_finished_pane_hands_off_once_per_declaration
 test_nonterminal_stale_not_working_surfaced
 test_finished_status_leftover_pane_absorbed_not_laddered
 test_finished_status_still_overridden_by_active_run

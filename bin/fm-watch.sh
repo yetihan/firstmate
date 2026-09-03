@@ -1951,16 +1951,15 @@ EOF
           # one-shot would re-wake the daemon on every tick for a task that
           # already reported its finish and had its decision answered.
           finished_declared="declared:$(fm_wake_signal_sig "$STATE/$task.status" || true)"
-          if [ "$(cat "$sf" 2>/dev/null || true)" != "$finished_declared" ]; then
+          afk_sf=$(cat "$sf" 2>/dev/null || true)
+          if [ "$afk_sf" != "$finished_declared" ] && [ "$afk_sf" != "$h" ]; then
+            fm_wake_append stale "$w" "stale: $w" || exit 1
             if crew_status_is_finished "$STATE/$task.status"; then
-              fm_wake_append stale "$w" "stale: $w" || exit 1
               printf '%s' "$finished_declared" > "$sf"
-              wake "stale: $w"
-            elif [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
-              fm_wake_append stale "$w" "stale: $w" || exit 1
+            else
               printf '%s' "$h" > "$sf"
-              wake "stale: $w"
             fi
+            wake "stale: $w"
           fi
         elif stale_is_terminal "$w" "$STATE"; then
           # The log's last line is captain-relevant - but that alone is not
@@ -2005,7 +2004,8 @@ EOF
             # without re-reading the crew state every poll, and without
             # letting the still-captain-relevant log line re-surface it.
             wedge_timer_check "$w" "$ssf" "stale (overridden terminal status)" "$ewf" "$task"
-          elif [ "$(cat "$STATE/.finished-$key" 2>/dev/null || true)" = "declared:$(fm_wake_signal_sig "$STATE/$task.status" || true)" ]; then
+          elif [ "$(cat "$STATE/.finished-$key" 2>/dev/null || true)" = "declared:$(fm_wake_signal_sig "$STATE/$task.status" || true)" ] \
+            || crew_status_is_finished "$STATE/$task.status"; then
             handle_finished_stale "$w" "$task" "$h"
           fi
           # else: already surfaced as genuinely terminal on a prior poll of
