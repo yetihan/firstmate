@@ -35,14 +35,18 @@
 #      checks" from "checks green, waiting on merge" (see nm_ci_checks_state) -
 #      a ci-step log-tail check overrides working -> done once checks read
 #      green, so a green PR is never silently read as still-validating.
-#   3. Reconcile the status log: if its last line says needs-decision/blocked but
-#      the run-step shows the run moved on, the log is deterministically stale and
-#      is flagged superseded. A genuinely parked run plus a needs-decision log
-#      agree, and are reported as parked.
+#   3. Reconcile the status log: if its effective state line (keyed decision
+#      verbs skipped, so a trailing `resolved` cannot mask the report under it)
+#      says needs-decision/blocked but the run-step shows the run moved on, the
+#      log is deterministically stale and is flagged superseded. A genuinely
+#      parked run plus a needs-decision log agree, and are reported as parked.
+#      The one reverse case: a terminal log report (done/failed) that DISAGREES
+#      with a terminal run-step label outranks it, because the log is the crew's
+#      own final report; the superseded run verdict stays in the detail.
 #   4. No run for this crew (pre-validation, or kind=scout): fall back to the
-#      recorded backend's pane busy state, then the status log's last line only
-#      when its verb maps to a recognized run-state. Decision-only events such as
-#      `resolved` never become current state or detail.
+#      recorded backend's pane busy state, then the status log's effective state
+#      line only when its verb maps to a recognized run-state. Decision-only
+#      events such as `resolved` never become current state or detail.
 #   5. Missing meta or torn-down worktree: report unknown · none. If no run is
 #      attributed to this crew, a dead endpoint also reports unknown · none rather
 #      than trusting a stale status log.

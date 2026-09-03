@@ -24,8 +24,13 @@
 #                          external-wait pause or verified captain-held transfer is
 #                          absorbed instead with its own long re-surface cadence,
 #                          never as a wedge, and that recheck reason names which
-#                          human the wait is on. Only when neither absorb class
-#                          applies does the log's last line decide:
+#                          human the wait is on. A status log whose effective
+#                          line already reports done/failed (keyed decision
+#                          verbs skipped) is a leftover pane awaiting cleanup,
+#                          not a wedge suspect, and is absorbed on that same
+#                          long cadence - unless crew state proves work or a
+#                          wedge timer is already armed under it. Only when no
+#                          absorb class applies does the log's last line decide:
 #                          terminal (captain-relevant) or non-terminal (no verb),
 #                          both surfaced at once. A provably-working stale past the
 #                          wedge threshold also surfaces, with an "escalation N"
@@ -34,18 +39,24 @@
 #                          also carries a "demand-deep-inspection" marker so the
 #                          wake payload itself, not just repetition, forces a
 #                          closer look instead of another routine supervision
-#                          resume. Unless afk is active. A pane whose own task
-#                          worktree was written during the quiet window is
-#                          deferred rather than escalated (wedge_defer_writing),
-#                          because files appearing there are liveness the pane and
-#                          the run step cannot show; that deferral still
+#                          resume; past that count the repeats themselves are
+#                          bounded to the long PAUSE_RESURFACE_SECS cadence, so
+#                          an already-deep-inspected pane is not re-alarmed
+#                          every escalation window. Unless afk is active. A pane
+#                          whose own task worktree was written during the quiet
+#                          window is deferred rather than escalated
+#                          (wedge_defer_writing), because files appearing
+#                          there are liveness the pane and the run step cannot
+#                          show; that deferral still
 #                          re-surfaces once per PAUSE_RESURFACE_SECS, and a pane
 #                          that writes nothing keeps the unchanged schedule.
 #                          A genuinely busy pane
 #                          (window_is_busy true) is exempt from the above, but
-#                          only up to BUSY_TURN_MAX_SECS with no completed turn
-#                          (state/<id>.turn-ended, or the spawn record before any
-#                          turn completes). Past that bound, a declared external
+#                          only until its freshest turn-boundary evidence
+#                          (state/<id>.turn-ended or state/<id>.busy-state,
+#                          whichever is younger; the spawn record anchors only a
+#                          task with neither) reaches BUSY_TURN_MAX_SECS.
+#                          Past that bound, a declared external
 #                          wait or verified captain-held transfer uses the long
 #                          pause recheck cadence (under afk it is instead handed
 #                          to the daemon as this plain reason, once per
@@ -202,17 +213,19 @@ STALE_ESCALATE_SECS=${FM_STALE_ESCALATE_SECS:-240}  # idle secs before a provabl
 # A busy pane is unconditional proof of liveness with no built-in duration bound,
 # so a hung foreground call can remain hidden even while its rendered busy
 # footer changes every poll. BUSY_TURN_MAX_SECS bounds how long any busy pane
-# may go with no completed turn: once its task's
-# state/<id>.turn-ended marker (or, before any turn has completed, the task's
-# spawn record) is this old, busy_turn_over_age routes the pane through
-# busy_turn_bound_check, which hands a crossed bound to the same
-# STALE_ESCALATE_SECS-paced wedge_timer_check used for a provably-working
+# may go with no turn-boundary evidence: once the freshest of its task's
+# state/<id>.turn-ended marker and state/<id>.busy-state event (or, before
+# either exists, the task's spawn record) is this old, busy_turn_over_age routes
+# the pane through busy_turn_bound_check, which hands a crossed bound to the
+# same STALE_ESCALATE_SECS-paced wedge_timer_check used for a provably-working
 # non-busy stale - so it escalates via the existing stale reason, escalation
 # counter, and demand-deep-inspection marker for human inspection only, never an
 # automatic interrupt, signal, or restart - unless the crew declared the wait
-# itself, which takes the long pause cadence instead. A completed turn touches
-# turn-ended and resets the age. Set generously above any legitimate interval
-# between completed turns, including long tool calls, builds, or test runs.
+# itself, which takes the long pause cadence instead. Any turn-boundary event -
+# a completed turn touching turn-ended, or a busy-state rewrite on a user
+# submission, turn open, or turn close - resets the age. Set generously above
+# any legitimate stretch without one, including long tool calls, builds, or
+# test runs inside a single turn.
 BUSY_TURN_MAX_SECS=${FM_BUSY_TURN_MAX_SECS:-3600}
 # A local secondmate's foreign queue is checked on every poll, but only after this
 # bounded age can it produce a parent notification.
@@ -702,8 +715,9 @@ FM_WEDGE_DEMAND_INSPECT_COUNT=${FM_WEDGE_DEMAND_INSPECT_COUNT:-3}
 # once past PAUSE_RESURFACE_SECS the pane wakes once per window rather than every
 # poll. An optional <scope> binds that cadence to its current declaration; callers
 # without a scoped declaration keep the timestamp body. Shared by the
-# declared-pause absorb and the worktree-write deferral so the two cadences cannot
-# drift apart; each caller owns its own marker and reason.
+# declared-pause absorb, the worktree-write deferral, and the finished-status
+# absorb so those cadences cannot drift apart; each caller owns its own marker
+# and reason.
 # Returns without waking while either the absorb or the throttle is inside the
 # window; wake() itself exits the cycle, exactly as it does inline.
 resurface_absorbed() {  # <window> <throttle-marker> <age> <reason> [scope]
@@ -2104,9 +2118,10 @@ EOF
         fi
       else
         # Pane busy or not yet stably stale: reset pending escalation bookkeeping,
-        # unless a genuinely busy pane has gone too long with no completed turn -
-        # then route it through busy_turn_bound_check, which hands the crossed
-        # bound to the same wedge timer unless the crew declared the wait itself.
+        # unless a genuinely busy pane has gone too long with no fresh
+        # turn-boundary evidence - then route it through busy_turn_bound_check,
+        # which hands the crossed bound to the same wedge timer unless the crew
+        # declared the wait itself.
         paused_bound=1
         if [ "$busy_now" -eq 0 ] && busy_turn_over_age "$task"; then
           busy_turn_bound_check "$w" "$task" "$h" "$ssf" "$ewf" && paused_bound=0
