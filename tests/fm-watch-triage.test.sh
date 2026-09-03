@@ -1824,6 +1824,65 @@ test_terminal_finished_pane_churning_hash_stays_absorbed() {
   pass "an attended finished leftover pane absorbs across hash churn instead of waking once per hash"
 }
 
+# A pane already surfaced at its current hash never re-runs the whole-file
+# decision fold per poll: the repeat arm caches its not-finished verdict as
+# checked:<sig> on the first evaluation, and only a changed status signature -
+# a fresh live ask - re-decides, once, under the new signature.
+test_terminal_repeat_sight_runs_the_fold_once_per_status_state() {
+  local dir state fakebin out drain_out capture_file window key pane_hash sig pid statusf
+  dir=$(make_case terminal-live-repeat); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"; capture_file="$dir/pane.txt"
+  window="test:fm-ask-repeat"; statusf="$state/ask-repeat.status"
+  printf 'window=%s\nkind=ship\n' "$window" > "$state/ask-repeat.meta"
+  printf 'needs-decision [key=ship]: merge or hold\n' > "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-ask-repeat_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  printf 'idle, waiting for the captain' > "$capture_file"
+  pane_hash=$(hash_text "idle, waiting for the captain")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  printf '%s' "$pane_hash" > "$state/.stale-$key"
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · no run, no busy pane'
+
+  # Steady state: the hash was already surfaced, so the repeat arm may only
+  # re-check the finished cadence; the fold's not-finished verdict is cached
+  # under the standing status signature.
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_PAUSE_RESURFACE_SECS=999999 FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "a surfaced live-verb pane re-woke firstmate on a repeat poll: $(cat "$out")"; }
+  wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "a surfaced live-verb pane exited mid-cycle on a repeat poll: $(cat "$out")"; }
+  [ ! -s "$out" ] || fail "a repeat poll on a surfaced live-verb pane printed a wake: $(cat "$out")"
+  [ "$(cat "$state/.finished-$key" 2>/dev/null || true)" = "checked:$(status_observed_signature "$statusf")" ] \
+    || fail "the repeat arm did not cache its not-finished verdict under the status signature: '$(cat "$state/.finished-$key" 2>/dev/null || true)'"
+  reap "$pid"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the intentional steady-state stop"
+
+  # A fresh ask appends a new status-file state: the fold re-decides exactly
+  # once and caches under the new signature; the pane still never wakes.
+  printf 'needs-decision [key=ship]: merge or hold (asked again)\n' >> "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-ask-repeat_status"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_PAUSE_RESURFACE_SECS=999999 FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "a re-asked live verb re-woke firstmate per poll: $(cat "$out")"; }
+  wait_poll_cycle "$state" "$pid" || { reap "$pid"; fail "a re-asked live verb exited mid-cycle: $(cat "$out")"; }
+  [ ! -s "$out" ] || fail "a re-asked live verb printed a wake on a repeat poll: $(cat "$out")"
+  [ "$(cat "$state/.finished-$key" 2>/dev/null || true)" = "checked:$(status_observed_signature "$statusf")" ] \
+    || fail "the repeat arm did not re-decide under the fresh status signature: '$(cat "$state/.finished-$key" 2>/dev/null || true)'"
+  reap "$pid"
+  unset FM_FAKE_CREW_STATE
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || true
+  grep "$(printf '\tstale\t')" "$drain_out" >/dev/null \
+    && fail "the silent repeat polls still queued a stale row: $(cat "$drain_out")"
+  pass "an attended live-verb pane runs the finished fold once per status state, never per poll"
+}
+
 # --- stale pane, STALE terminal status overridden by an active run: absorbed ---
 # Regression for the 2026-07 herdr false-surface incidents: a crew's own status
 # log gets no new entry once firstmate hands it to a no-mistakes validation
@@ -4577,6 +4636,7 @@ test_permission_recovery_surfaces_preserved_status
 test_terminal_done_stale_absorbs_on_finished_cadence
 test_terminal_live_verb_stale_surfaces
 test_terminal_finished_pane_churning_hash_stays_absorbed
+test_terminal_repeat_sight_runs_the_fold_once_per_status_state
 test_stale_terminal_status_overridden_by_active_run
 test_nonterminal_stale_provably_working_absorbed_then_escalated
 test_wedge_escalation_marks_demand_deep_inspection_after_threshold

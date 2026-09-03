@@ -934,6 +934,31 @@ handle_finished_stale() {  # <window> <task> <hash>
   triage_log "absorbed stale (finished status, age ${age}s): $win"
 }
 
+# Repeat-poll gate shared by the two finished-cadence arms: 0 when this poll
+# re-enters handle_finished_stale, 1 when it must not. A matching declaration
+# scope decides on the stat signature alone; anything else runs the whole-file
+# decision fold at most once per distinct status-file state, caching a
+# not-finished verdict as checked:<sig> (a value that can never equal a
+# declared: scope), so a pane already surfaced at its current hash never
+# re-runs the fold per poll, while a changed status signature - a fresh
+# declaration or a fresh live ask - still re-decides immediately.
+finished_absorb_ready() {  # <window-key> <task>
+  local key=$1 task=$2 marker sig
+  sig=$(fm_wake_signal_sig "$STATE/$task.status" || true)
+  marker=$(cat "$STATE/.finished-$key" 2>/dev/null || true)
+  if [ "$marker" = "declared:$sig" ]; then
+    return 0
+  fi
+  if [ "$marker" = "checked:$sig" ]; then
+    return 1
+  fi
+  if crew_status_is_finished "$STATE/$task.status"; then
+    return 0
+  fi
+  printf '%s' "checked:$sig" > "$STATE/.finished-$key"
+  return 1
+}
+
 # Apply the busy-pane completed-turn bound to a window whose bound has already
 # crossed, honoring the worker's OWN declared external wait. Prints/queues
 # nothing itself; it only chooses which absorber owns the crossed bound.
@@ -2004,8 +2029,7 @@ EOF
             # without re-reading the crew state every poll, and without
             # letting the still-captain-relevant log line re-surface it.
             wedge_timer_check "$w" "$ssf" "stale (overridden terminal status)" "$ewf" "$task"
-          elif [ "$(cat "$STATE/.finished-$key" 2>/dev/null || true)" = "declared:$(fm_wake_signal_sig "$STATE/$task.status" || true)" ] \
-            || crew_status_is_finished "$STATE/$task.status"; then
+          elif finished_absorb_ready "$key" "$task"; then
             handle_finished_stale "$w" "$task" "$h"
           fi
           # else: already surfaced as genuinely terminal on a prior poll of
@@ -2070,7 +2094,7 @@ EOF
               # working arm above absorbed this same hash as provably working
               # under the finished leftover (2026-07: the log alone is not
               # proof of done, and a frozen run under it must still escalate).
-              if [ ! -e "$ssf" ] && { [ "$(cat "$STATE/.finished-$key" 2>/dev/null || true)" = "declared:$(fm_wake_signal_sig "$STATE/$task.status" || true)" ] || crew_status_is_finished "$STATE/$task.status"; }; then
+              if [ ! -e "$ssf" ] && finished_absorb_ready "$key" "$task"; then
                 handle_finished_stale "$w" "$task" "$h"
               else
                 wedge_timer_check "$w" "$ssf" "non-terminal stale" "$ewf" "$task"
