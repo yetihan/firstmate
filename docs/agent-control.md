@@ -38,6 +38,7 @@ A recorded `harness=` is not always an exact adapter name: a task launched from 
 
 An exit that delivers lifecycle input but cannot prove the agent stopped fails with `exit=unconfirmed`, reports the observed agent state and any interrupt cancellation claim, and never claims that nothing changed.
 Interrupt never rewrites busy state as proof of its own success.
+A verified interrupt does land the turn-ended notification marker, because some harnesses fire no turn-end hook of their own on the interrupt path (Claude's Stop hook never runs after a manual interrupt) and the watcher ages a busy pane's turn bound from that marker.
 Claude exposes no lifecycle acknowledgement for a manual interrupt, so delivery succeeds with `cancel=unconfirmed` and its adapter-owned busy state remains as observed.
 muse's session log records `terminal=cancelled` for the interrupted run, so the control plane reports `cancel=confirmed` only after observing that exact acknowledgement.
 

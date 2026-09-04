@@ -260,6 +260,28 @@ test_interrupt_sends_each_harness_verified_key() {
   pass "fm-control interrupt: every verified harness gets its own verified key and repeat count"
 }
 
+# A verified interrupt ended the agent's turn, and the harnesses that fire no
+# turn-end hook of their own on that path (Claude's Stop hook never runs after a
+# manual interrupt) would otherwise leave the turn-ended notification unlanded -
+# the watcher then ages the pane's turn bound from the interrupted turn's
+# opening and re-alarms a healthy crew on it. The interrupt itself must land the
+# notification marker, without rewriting busy state.
+test_interrupt_lands_turn_ended_notification() {
+  local dir out rc
+  dir=$(new_case int-turnend)
+  add_task "$dir" t1 claude
+  alive_as "$dir" claude
+  [ ! -e "$dir/home/state/t1.turn-ended" ] \
+    || fail "fixture hygiene: turn-ended must start absent"
+  out=$(run_control "$dir" t1 interrupt); rc=$?
+  expect_code 0 "$rc" "interrupt should succeed"$'\n'"$out"
+  [ -e "$dir/home/state/t1.turn-ended" ] \
+    || fail "a verified interrupt must land the turn-ended notification marker"
+  [ ! -e "$dir/home/state/t1.busy-state" ] \
+    || fail "interrupt must not rewrite busy state as proof of its own success"
+  pass "fm-control interrupt: a landed interrupt lands the turn-ended notification"
+}
+
 # A recorded harness can carry a raw launch command's basename, so the tables
 # are reached through one prefix rule rather than an exact string match.
 test_harness_family_resolution() {
@@ -875,6 +897,7 @@ test_fm_send_still_marks_the_same_secondmate_task() {
 
 test_exit_types_each_harness_verified_command
 test_interrupt_sends_each_harness_verified_key
+test_interrupt_lands_turn_ended_notification
 test_opencode_interrupts_twice_and_others_once
 test_unverified_harness_is_refused
 test_harness_family_resolution

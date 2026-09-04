@@ -1030,6 +1030,60 @@ test_no_run_idle_secondmate_resolved_event_not_state() {
   pass "a trailing resolved: event does not corrupt state render (idle stays idle)"
 }
 
+# A done: report under a trailing keyed resolved: answer is still the state the
+# status log reports. Before the effective-line walk, a task that finished and
+# then had its decision answered read its leftover resolved: line as the current
+# verb, fell past the log, and rendered a run leftover instead of its own done -
+# which kept a finished task looking unfinished through every state reader.
+test_done_report_under_resolved_answer_is_state() {
+  reset_fakes
+  local d; d=$(new_case done-resolved)
+  make_repo_on_branch "$d/wt" fm/feat-dn
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-dn.meta" "window=fm:fm-feat-dn" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'working: implementing\nneeds-decision [key=merge]: merge or hold\nresolved [key=merge]: answered: merge\ndone: local-ready on fm/feat-dn\n' > "$d/state/feat-dn.status"
+  printf 'resolved [key=cleanup]: answered: teardown proceeds\n' >> "$d/state/feat-dn.status"
+  FM_FAKE_AXI_STATUS=""
+  FM_FAKE_BUSY=0
+  arm_idle_record "$d/state" feat-dn
+  local out; out=$(run_crew_state "$d" feat-dn)
+  assert_contains "$out" "state: done" "done under a resolved answer renders done"
+  assert_contains "$out" "source: status-log" "the effective line is status-log sourced"
+  assert_contains "$out" "local-ready on fm/feat-dn" "the done note carries into the detail"
+  assert_not_contains "$out" "answered: merge" "resolution prose does not leak as detail"
+  assert_not_contains "$out" "teardown proceeds" "later resolution prose does not leak either"
+  pass "a done: report under trailing resolved: answers is the rendered state"
+}
+
+# A terminal status-log verdict outranks a DISAGREEING terminal run label: the
+# crew's own done: report is its final word, so a stale run record still reading
+# failed under it must not mask the finish (the finished task could not be
+# cleaned up because every state reader saw failed). When both agree, the
+# run-step keeps its richer detail and source.
+test_terminal_log_verdict_outranks_disagreeing_run_step() {
+  reset_fakes
+  local d; d=$(new_case log-outranks-run)
+  make_repo_on_branch "$d/wt" fm/feat-lo
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-lo.meta" "window=fm:fm-feat-lo" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'done: local-ready on fm/feat-lo\nresolved [key=merge]: answered: merge\n' > "$d/state/feat-lo.status"
+  FM_FAKE_AXI_STATUS="$(run_failed fm/feat-lo)"
+  local out; out=$(run_crew_state "$d" feat-lo)
+  assert_contains "$out" "state: done" "the log's done outranks the run's failed label"
+  assert_contains "$out" "source: status-log" "the disagreement resolves to the status log"
+  assert_contains "$out" "superseded" "the superseded run verdict stays visible"
+  assert_contains "$out" "local-ready on fm/feat-lo" "the log's done note carries"
+
+  # Agreement keeps the run-step source and its richer detail.
+  printf 'done: local-ready on fm/feat-lo\nresolved [key=merge]: answered: merge\n' > "$d/state/feat-lo.status"
+  FM_FAKE_AXI_STATUS="$(run_passed fm/feat-lo)"
+  out=$(run_crew_state "$d" feat-lo)
+  assert_contains "$out" "state: done" "an agreeing run still reports done"
+  assert_contains "$out" "source: run-step" "agreement keeps the run-step source"
+  assert_not_contains "$out" "superseded" "agreeing verdicts are not flagged stale"
+  pass "a terminal log verdict outranks a disagreeing run label, not an agreeing one"
+}
+
 test_dead_window_ignores_stale_status_log() {
   reset_fakes
   local d; d=$(new_case dead-window)
@@ -1583,6 +1637,8 @@ test_no_run_idle_pane_uses_keyed_log
 test_no_run_idle_pane_paused
 test_no_run_idle_pane_custom_paused_verb
 test_no_run_idle_secondmate_resolved_event_not_state
+test_done_report_under_resolved_answer_is_state
+test_terminal_log_verdict_outranks_disagreeing_run_step
 test_dead_window_ignores_stale_status_log
 test_dead_window_still_reports_terminal_run_step
 test_dead_window_still_reports_active_run_step
