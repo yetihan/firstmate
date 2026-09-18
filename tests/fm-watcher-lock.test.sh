@@ -34,6 +34,62 @@ drain_and_ack() {  # <state>
     --recovery-generation "$generation"
 }
 
+test_wait_deadline_reaps_a_stopped_child() {
+  # A stopped TERM-resistant child cannot finish graceful cleanup. The helper waited
+  # forever after its nominal deadline. An outer process-group deadline keeps
+  # this regression finite even if that bug returns.
+  python3 - "$ROOT/tests/wake-helpers.sh" <<'PY' || fail "bounded child cleanup regression"
+import os
+import signal
+import subprocess
+import sys
+
+script = r'''
+. "$1"
+bash -c 'trap "" TERM; kill -STOP "$$"; exec sleep 300' &
+pid=$!
+for i in $(seq 1 100); do
+  state=$(ps -p "$pid" -o stat=)
+  case "$state" in *T*) break ;; esac
+  sleep 0.01
+done
+case "$state" in *T*) ;; *) kill -KILL "$pid"; exit 23 ;; esac
+wait_for_exit "$pid" 2
+rc=$?
+[ "$rc" = 124 ] || exit 21
+! kill -0 "$pid" 2>/dev/null || exit 22
+'''
+p = subprocess.Popen([os.environ.get("BASH", "bash"), "-c", script, "_", sys.argv[1]],
+                     start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+try:
+    out, err = p.communicate(timeout=15)
+except subprocess.TimeoutExpired:
+    os.killpg(p.pid, signal.SIGKILL)
+    p.communicate()
+    raise SystemExit("wait_for_exit hung after its deadline on a stopped child")
+if p.returncode or "survived TERM; sending KILL" not in err:
+    raise SystemExit(f"cleanup rc={p.returncode}, stdout={out}, stderr={err}")
+PY
+  pass "wait deadline diagnoses and reaps a stopped test child without hanging"
+}
+
+# Preserve the real watcher's trap diagnostics when testing its termination.
+# A termination defect should fail this case promptly, not occupy a CI runner
+# until the whole job times out and hides every following test.
+stop_seed_watcher() {  # <owned-pid> <output-path>
+  local pid=$1 out=$2 status=0
+  kill -TERM "$pid" 2>/dev/null || true
+  wait_for_exit "$pid" 100 || status=$?
+  if [ "$status" -eq 124 ]; then
+    cat "$out" >&2
+    fail "seed watcher survived TERM; see bounded wait/process/trap evidence above"
+  fi
+  if grep -E 'unexpected EOF|syntax error' "$out" >/dev/null; then
+    cat "$out" >&2
+    fail "seed watcher emitted a shell parser error during termination"
+  fi
+}
+
 test_singleton_start() {
   local dir state fakebin out1 out2 pid1 pid2 live i
   dir=$(make_case singleton)
@@ -116,6 +172,133 @@ test_live_stale_watch_lock_is_actionable() {
   pass "live watcher lock with stale heartbeat is actionable"
 }
 
+# The 2026-09 incident's write-side defect: fm_pid_identity failed transiently
+# at startup and the watcher still created an EMPTY pid-identity file, leaving a
+# lock no identity-verifying consumer could ever prove healthy while the holder
+# kept polling. The identity write must instead be fail-closed. Force both
+# identity sources to fail deterministically - an empty FM_PROC_ROOT_OVERRIDE
+# defeats /proc on every platform, and a failing ps fake on PATH defeats the
+# fallback - and the watcher must refuse to supervise rather than publish an
+# unauditable lock.
+test_watcher_refuses_to_supervise_without_a_readable_identity() {
+  local dir state fakebin out err status
+  dir=$(make_case identity-unreadable)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  err="$dir/watch.err"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$fakebin/ps"
+  chmod +x "$fakebin/ps"
+  mkdir "$dir/empty-proc"
+  status=0
+  PATH="$fakebin:$PATH" FM_PROC_ROOT_OVERRIDE="$dir/empty-proc" \
+    FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" 2> "$err" || status=$?
+  [ "$status" -ne 0 ] || fail "watcher supervised a home whose own identity it could not read"
+  grep -F 'watcher: FAILED - could not read this watcher' "$out" >/dev/null \
+    || fail "identity read failure did not report the typed unauditable refusal"
+  [ ! -e "$state/.watch.lock/pid-identity" ] \
+    || fail "identity read failure still left a pid-identity file behind"
+  pass "watcher refuses to supervise when its own pid identity cannot be read"
+}
+
+# The same incident's read-side defect: a live holder whose lock carries an
+# EMPTY pid-identity is unauditable - fm_watcher_healthy fails forever while
+# the holder keeps the beacon fresh - and the old singleton path just yielded
+# to it forever. Seed a genuinely healthy watcher first (its non-empty
+# identity is the positive control for the fail-closed write), corrupt exactly
+# the incident's shape by emptying the identity file, and the next start must
+# TERM the holder - whose live command line still proves this watcher script -
+# and take over the singleton instead of yielding to an unauditable supervisor.
+test_unauditable_empty_identity_lock_is_taken_over() {
+  local dir state fakebin out1 out2 pid1 pid2 owner_dir i
+  dir=$(make_case empty-identity-takeover)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  out1="$dir/watch-one.out"
+  out2="$dir/watch-two.out"
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out1" &
+  pid1=$!
+  i=0
+  while [ "$i" -lt 80 ]; do
+    [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$pid1" ] \
+      && [ -s "$state/.watch.lock/pid-identity" ] \
+      && [ -e "$state/.last-watcher-beat" ] \
+      && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$pid1" ] \
+    && [ -s "$state/.watch.lock/pid-identity" ] \
+    || fail "seed watcher did not publish an auditable identity"
+  [ -e "$state/.last-watcher-beat" ] || fail "seed watcher never beat its beacon"
+  # Corrupt exactly the incident's shape: empty identity file, live holder.
+  # Backdate the claim past any startup window on both stat flavors: macOS
+  # fm_path_age reads the lock symlink's own mtime, Linux follows it to the
+  # owner directory, so age both.
+  : > "$state/.watch.lock/pid-identity"
+  owner_dir=$(readlink "$state/.watch.lock") \
+    || fail "seed watcher lock is not the production symlink shape"
+  touch -t 200001010000 "$owner_dir" 2>/dev/null || true
+  touch -h -t 200001010000 "$state/.watch.lock" 2>/dev/null || true
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out2" &
+  pid2=$!
+  i=0
+  while [ "$i" -lt 100 ]; do
+    [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$pid2" ] \
+      && [ -s "$state/.watch.lock/pid-identity" ] \
+      && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  stop_seed_watcher "$pid1" "$out1"
+  grep -F "watcher: replacing pid $pid1" "$out2" >/dev/null \
+    || fail "second watcher did not announce replacing the unauditable holder"
+  grep -F "watcher: took over the lock of unauditable pid $pid1" "$out2" >/dev/null \
+    || fail "second watcher did not take over the unauditable singleton"
+  [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$pid2" ] \
+    || fail "taking-over watcher never recorded itself as the lock holder"
+  [ -s "$state/.watch.lock/pid-identity" ] \
+    || fail "taking-over watcher left its lock without a readable identity"
+  stop_seed_watcher "$pid2" "$out2"
+  pass "watcher takes over a live lock whose empty identity makes it unauditable"
+}
+
+# The takeover's negative control: an empty identity whose live holder cannot
+# be PROVEN to be this watcher script must never be signalled. A plain sleep
+# process holding the corrupt-shaped lock is refused loudly, and both the
+# holder and its lock come through untouched.
+test_unprovable_empty_identity_holder_is_refused_not_signalled() {
+  local dir state fakebin out err status holder
+  dir=$(make_case unprovable-holder)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  err="$dir/watch.err"
+  sleep 60 &
+  holder=$!
+  mkdir "$state/.watch.lock"
+  printf '%s\n' "$holder" > "$state/.watch.lock/pid"
+  printf '%s\n' "$dir" > "$state/.watch.lock/fm-home"
+  printf '%s\n' "$ROOT/bin/fm-watch.sh" > "$state/.watch.lock/watcher-path"
+  : > "$state/.watch.lock/pid-identity"
+  touch -t 200001010000 "$state/.watch.lock"
+  : > "$state/.last-watcher-beat"
+  status=0
+  PATH="$fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" 2> "$err" || status=$?
+  [ "$status" -ne 0 ] || fail "watcher silently no-opped behind an unprovable empty-identity holder"
+  grep -F 'does not prove this watcher script' "$err" >/dev/null \
+    || fail "watcher did not explain the unprovable empty-identity holder"
+  kill -0 "$holder" 2>/dev/null || fail "an unprovable holder was signalled instead of refused"
+  [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$holder" ] \
+    || fail "refusal disturbed the unprovable holder's lock"
+  [ ! -s "$state/.watch.lock/pid-identity" ] \
+    || fail "refusal wrote an identity into another holder's lock"
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  pass "unprovable empty-identity holder is refused loudly and never signalled"
+}
+
 test_guard_warnings() {
   # The guard's two operator-visible states, with resilient substrings instead of
   # four copy-coupled tests:
@@ -124,19 +307,25 @@ test_guard_warnings() {
   #       warning follows it, and the guidance is repair-after-drain (never the
   #       old conflicting "restart NOW first").
   #   (2) a fresh watcher and an empty queue: total silence.
-  local dir state err first banner_line queue_line pid identity
+  local dir state err first banner_line queue_line pid identity blind
   dir=$(make_case guard)
+  # The repair line the cases below assert is the CLAUDE one, so detect_own has to
+  # answer claude. A marker alone no longer pins that: a structural ancestor of a
+  # different harness outranks it, so the harness this suite was launched from
+  # would otherwise choose the wording. Blind the ancestry walk as well; every
+  # other ps query (watcher liveness below) still reaches the real ps.
+  blind=$(fm_fakebin "$dir/blind")
+  fm_fake_blind_ancestry "$blind"
   state="$dir/state"
   err="$dir/guard.err"
 
   # (1) watcher down (no beacon) + two in-flight tasks + a queued wake.
   # FM_ROOT_OVERRIDE points the worktree-tangle check at a non-git dir so it stays
   # inert here; this case is about the watcher-down banner, not the tangle guard.
-  # Pin Claude so the host test runner's harness ancestry cannot change this fixture.
   printf 'project=x\n' > "$state/task.meta"
   printf 'project=y\n' > "$state/task2.meta"
   append_wake "$state" heartbeat heartbeat heartbeat || fail "guard heartbeat append failed"
-  CLAUDECODE=1 PI_CODING_AGENT='' GROK_AGENT='' FM_ROOT_OVERRIDE="$dir" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=1 "$ROOT/bin/fm-guard.sh" 2> "$err" >/dev/null || fail "guard failed"
+  PATH="$blind:$PATH" CLAUDECODE=1 PI_CODING_AGENT='' GROK_AGENT='' FM_ROOT_OVERRIDE="$dir" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=1 "$ROOT/bin/fm-guard.sh" 2> "$err" >/dev/null || fail "guard failed"
   first=$(grep -v '^[[:space:]]*$' "$err" | head -1)
   case "$first" in
     '●'*) ;;
@@ -162,7 +351,7 @@ test_guard_warnings() {
   mkdir -p "$dir/config"
   printf 'project=x\n' > "$state/task.meta"
   : > "$dir/config/x-mode.env"
-  CLAUDECODE=1 PI_CODING_AGENT='' GROK_AGENT='' FM_ROOT_OVERRIDE="$dir" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=1 "$ROOT/bin/fm-guard.sh" 2> "$err" >/dev/null || fail "guard failed"
+  PATH="$blind:$PATH" CLAUDECODE=1 PI_CODING_AGENT='' GROK_AGENT='' FM_ROOT_OVERRIDE="$dir" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=1 "$ROOT/bin/fm-guard.sh" 2> "$err" >/dev/null || fail "guard failed"
   grep -F "source '$dir/config/x-mode.env' first" "$err" >/dev/null || fail "guard repair line did not source the X-mode cadence config"
 
   # (2) live watcher plus fresh beacon, empty queue -> silence.
@@ -569,7 +758,7 @@ test_arm_attaches_and_waits_for_live_fresh_watcher() {
   out="$dir/watch.out"
   armout="$dir/arm.out"
   # A genuinely live watcher with a fresh beacon already holds the singleton.
-  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" 2>&1 &
   wpid=$!
   i=0
   while [ "$i" -lt 60 ]; do
@@ -594,8 +783,7 @@ test_arm_attaches_and_waits_for_live_fresh_watcher() {
   [ "$(cat "$state/.watch.lock/pid" 2>/dev/null || true)" = "$wpid" ] || fail "arm disturbed the healthy watcher's lock"
   is_live_non_zombie "$armpid" || fail "arm exited while the seed watcher was still healthy"
   # After the seed dies without a successor, the attached arm must fail loudly.
-  kill "$wpid" 2>/dev/null || true
-  wait "$wpid" 2>/dev/null || true
+  stop_seed_watcher "$wpid" "$out"
   wait_for_exit "$armpid" 80
   status=$?
   [ "$status" -ne 0 ] && [ "$status" -ne 124 ] || fail "attached arm did not fail after seed died (status $status)"
@@ -610,7 +798,7 @@ test_attached_arm_signal_is_recorded_in_cycle_ledger() {
   fakebin="$dir/fakebin"
   out="$dir/watch.out"
   armout="$dir/arm.out"
-  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" 2>&1 &
   wpid=$!
   i=0
   while [ "$i" -lt 60 ]; do
@@ -635,8 +823,7 @@ test_attached_arm_signal_is_recorded_in_cycle_ledger() {
   grep -q "arm_pid=$armpid.*watcher_pid=$wpid.*origin=attached.*exit_code=143.*signal=TERM.*reason=arm-interrupted" "$state/.watch-cycle-exits.log" \
     || fail "attached arm signal was not recorded in the lifecycle ledger"
   is_live_non_zombie "$wpid" || fail "signaling an attached arm terminated the peer watcher"
-  kill "$wpid" 2>/dev/null || true
-  wait "$wpid" 2>/dev/null || true
+  stop_seed_watcher "$wpid" "$out"
   pass "attached arm signals record a classified lifecycle entry"
 }
 
@@ -1102,6 +1289,7 @@ test_msys_pid_identity_uses_proc() {
   pass "MSYS process identity uses compatible /proc fields"
 }
 
+test_wait_deadline_reaps_a_stopped_child
 test_singleton_start
 test_pid_identity_is_locale_invariant
 test_proc_pid_identity_ignores_wall_clock_and_detects_pid_reuse
@@ -1109,6 +1297,9 @@ test_msys_pid_identity_uses_proc
 test_stale_watch_lock_reclaimed
 test_stale_watch_reclaim_publishes_before_clear
 test_live_stale_watch_lock_is_actionable
+test_watcher_refuses_to_supervise_without_a_readable_identity
+test_unauditable_empty_identity_lock_is_taken_over
+test_unprovable_empty_identity_holder_is_refused_not_signalled
 test_guard_warnings
 test_lock_single_winner_under_concurrency
 test_lock_steals_dead_pid_lock
