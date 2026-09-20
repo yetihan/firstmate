@@ -1,7 +1,7 @@
 # GitLab merge request watch and merge verification
 
 Empirical record for the merge watch and the merge path on GitLab, alongside the existing GitHub ones.
-The arming, poll, and missing-`glab` evidence through the GitHub-unaffected case was collected on 2026-07-21; "Merging a merge request" was run on 2026-08-22.
+The arming, poll, and missing-`glab` evidence through the GitHub-unaffected case was collected on 2026-07-21; the refusal and recording runs in "Merging a merge request" were run on 2026-08-22, and its no-CI waiver runs on 2026-09-20.
 Every output is reproduced exactly.
 
 ## Versions
@@ -28,6 +28,19 @@ GNU bash, version 5.2.15(1)-release (x86_64-amazon-linux-gnu)
 ```
 
 That `glab` is a locally built 1.82.0; only its build tag and commit are elided, because they name a private build rather than a released version.
+
+The no-CI waiver evidence dated 2026-09-20 was collected on macOS, on:
+
+```
+$ glab --version
+glab 1.109.0 (757294c0)
+
+$ jq --version
+jq-1.8.2
+
+$ bash --version | head -1
+GNU bash, version 3.2.57(1)-release (arm64-apple-darwin23)
+```
 
 ## The evidence project
 
@@ -188,7 +201,7 @@ Arm a current watch with `bin/fm-pr-check.sh`.
 
 `bin/fm-pr-merge.sh` now merges a GitLab merge request through the shared recording helper and GitLab's own live pre-merge guards.
 Every run below used a throwaway `FM_HOME`, so no live task record was touched, and a `glab` wrapper that refused any `merge` subcommand outright, so no merge could reach the forge even if a check were wrong.
-That wrapper is why the open fixture merge request could be used as evidence at all: it is `mergeable` with discussions resolved, so the pipeline conditions are the only thing between it and a real merge.
+That wrapper is why the open fixture merge request could be used as evidence at all: it is `mergeable` with discussions resolved, so once its no-CI pipeline conditions are waived nothing stands between it and a real merge.
 
 Merging needs `glab` for the read and `jq` to parse it, and either one absent refuses before anything is recorded:
 
@@ -217,29 +230,27 @@ armed: state/e1.check.sh
 error: refusing to merge https://gitlab.com/KarotKris/gitlab-merge-watch-fixture/-/merge_requests/1
   - state is "merged", not open
   - detailed_merge_status is "not_open", not mergeable
-  - the head pipeline status is "none", not success
-  - the head pipeline ran at "none", not at the current head 33762fcf6777c8d993220d25fb541e56c48081b9
 $ echo $?
 1
 ```
 
-The open half is `mergeable`, conflict-free, and has its discussions resolved, so only the pipeline conditions refuse it.
-The fixture runs no CI, so its `head_pipeline` is `null`, which is reported as `none` rather than treated as nothing to check:
+The open half is `mergeable`, conflict-free, and has its discussions resolved, and the fixture runs no CI at all, so its `head_pipeline` is `null`.
+The pipeline gate is three-state, and `bin/fm-pr-merge.sh`'s header owns it: a pipeline that succeeded at the exact current head passes; a pipeline that failed, ran somewhere else, or never ran refuses; and a project that genuinely has no CI configuration has the pipeline conditions waived, but only after the absence is proven from GitLab's own read-only project and repository APIs, never from the empty pipeline alone.
+The fixture is exactly the third state, and a `glab` wrapper that refuses `mr merge` keeps the evidence read-only:
 
 ```
 $ fm-pr-merge.sh e2 https://gitlab.com/KarotKris/gitlab-merge-watch-fixture/-/merge_requests/2
 armed: state/e2.check.sh
-error: refusing to merge https://gitlab.com/KarotKris/gitlab-merge-watch-fixture/-/merge_requests/2
-  - the head pipeline status is "none", not success
-  - the head pipeline ran at "none", not at the current head 66b8a6777bea5e291d7fa2fc20c42ad7686f6bc8
+verified: https://gitlab.com/KarotKris/gitlab-merge-watch-fixture/-/merge_requests/2 is open and mergeable; the project has no CI configuration, so the head-pipeline check is waived (the project's CI config path '.gitlab-ci.yml' is absent from the repository at head 66b8a6777bea5e291d7fa2fc20c42ad7686f6bc8); head 66b8a6777bea5e291d7fa2fc20c42ad7686f6bc8
+merge refused by evidence wrapper
 $ echo $?
 1
 ```
 
-A project that runs no pipeline at all therefore cannot merge through this path.
-That is the intended reading of the requirement rather than an oversight: a successful pipeline at the head is a condition, and "there is no pipeline" does not satisfy it.
-
-Both refusals came after `pr=` was recorded and the merge poll was armed, as a failed live verification or `gh pr merge` does on the GitHub side, so a refusal still leaves the audit trail and the watch in place.
+The verified line names the waiver and its basis because an exempt merge has to stay auditable.
+An empty pipeline on a project that does have CI configuration still refuses, and so does an absence the probes cannot prove: an unreadable project settings call, a config path that points at another project, or an auth failure all leave the pipeline refusal in place.
+Those refusal forms, the explicit `--no-ci` flag, and its misuse forms are pinned by `tests/fm-pr-merge.test.sh` against fixtures, because they cannot be shown against this fixture without changing it.
+Every run above recorded `pr=` and armed the merge poll before the forge call, as a failed live verification or `gh pr merge` does on the GitHub side, so a refused or failed merge still leaves the audit trail and the watch in place.
 
 A recorded `pr_head=` that no longer matches the live head is reported, and the live head is what gets verified.
 The stale value below was written into the task record by hand, because a GitLab task never records one on its own:
@@ -248,9 +259,10 @@ The stale value below was written into the task record by hand, because a GitLab
 $ fm-pr-merge.sh e4 https://gitlab.com/KarotKris/gitlab-merge-watch-fixture/-/merge_requests/2
 armed: state/e4.check.sh
 notice: recorded head 1111111111111111111111111111111111111111 disagrees with the live head 66b8a6777bea5e291d7fa2fc20c42ad7686f6bc8; verifying the live head
-error: refusing to merge https://gitlab.com/KarotKris/gitlab-merge-watch-fixture/-/merge_requests/2
-  - the head pipeline status is "none", not success
-  - the head pipeline ran at "none", not at the current head 66b8a6777bea5e291d7fa2fc20c42ad7686f6bc8
+verified: https://gitlab.com/KarotKris/gitlab-merge-watch-fixture/-/merge_requests/2 is open and mergeable; the project has no CI configuration, so the head-pipeline check is waived (the project's CI config path '.gitlab-ci.yml' is absent from the repository at head 66b8a6777bea5e291d7fa2fc20c42ad7686f6bc8); head 66b8a6777bea5e291d7fa2fc20c42ad7686f6bc8
+merge refused by evidence wrapper
+$ echo $?
+1
 ```
 
 The remaining refusal conditions, and the merge itself, are covered by `tests/fm-pr-merge.test.sh` against fixtures.
