@@ -922,6 +922,107 @@ EOF
   pass "spawn: relaunch re-dispatches on the recorded thread and preserves meta"
 }
 
+# The control-plane relaunch verb on a nio-chat task (bin/fm-control.sh): the
+# documented contract requires --note for a scout relaunch and the note rides
+# the instructions onto the recorded thread; model, effort, and a foreign
+# harness are refused explicitly rather than silently dropped; and a
+# spawn-plane refusal rolls the instructions back byte-exact.
+nio_control_case() {  # <name> <run-record-json>: a scout task recorded on the nio runtime
+  nio_case "$1"
+  printf 'on\n' > "$CFG/nio-chat-worker"
+  mkdir -p "$DATA/t1"
+  printf 'TASK BRIEF: try again with warmer colors.\n' > "$DATA/t1/brief.md"
+  cat > "$STATE/t1.meta" <<'EOF'
+window=fm-t1
+endpoint_task_id=t1
+harness=nio-chat-agent
+kind=scout
+tasktmp=/tmp/fm-t1
+model=default
+effort=default
+spawn_gen=s0
+backend=nio-chat
+external_ref=th-1
+EOF
+  nio_record t1 "$2"
+}
+
+run_control() {  # <args...>: bin/fm-control.sh against the case fixture
+  PATH="$FB:$PATH" FM_ROOT_OVERRIDE='' FM_HOME="$CASE" \
+    FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CFG" \
+    FM_NIOCHAT_HANDSHAKE="$HS" FM_NIOCHAT_HTTP_TIMEOUT=10 \
+    FM_NIOCHAT_DISPATCH_GRACE=5 FM_NIOCHAT_RUN_TIMEOUT=600 \
+    FM_NIO_FAKE_LOG="$FAKE_LOG" FM_NIO_FAKE_RESP="$RESP" \
+    "$ROOT/bin/fm-control.sh" "$@" 2>&1
+}
+
+test_control_relaunch_requires_note_for_nio_scout() {
+  local out rc
+  nio_control_case control-relaunch-note '{"task":"t1","thread":"th-1","thread_owner":"adopted","run_id":"run-1","status":"done","deadline":1,"started":1}'
+  rc=0
+  out=$(run_control t1 relaunch) || rc=$?
+  [ "$rc" -ne 0 ] || fail "a noteless scout relaunch must be refused"
+  assert_contains "$out" 'requires --note' "the refusal must name the missing progress note"
+  [ "$(cat "$DATA/t1/brief.md")" = 'TASK BRIEF: try again with warmer colors.' ] \
+    || fail "a refused relaunch still touched the instructions"
+  pass "control: a nio scout relaunch without --note refuses with the documented reason"
+}
+
+test_control_relaunch_refuses_unhonorable_axes_for_nio() {
+  local out rc
+  nio_control_case control-relaunch-axes '{"task":"t1","thread":"th-1","thread_owner":"adopted","run_id":"run-1","status":"done","deadline":1,"started":1}'
+  rc=0
+  out=$(run_control t1 relaunch --note 'carry on' --model gemini-3.8-flash-low) || rc=$?
+  [ "$rc" -ne 0 ] || fail "--model must be refused, not silently dropped"
+  assert_contains "$out" '--model cannot be honored by a nio-chat relaunch' "the --model refusal must name the runtime owner"
+  rc=0
+  out=$(run_control t1 relaunch --note 'carry on' --effort high) || rc=$?
+  [ "$rc" -ne 0 ] || fail "--effort must be refused, not silently dropped"
+  assert_contains "$out" '--effort cannot be honored by a nio-chat relaunch' "the --effort refusal must name the runtime owner"
+  rc=0
+  out=$(run_control t1 relaunch --note 'carry on' --harness claude) || rc=$?
+  [ "$rc" -ne 0 ] || fail "a foreign --harness must be refused, not silently overridden"
+  assert_contains "$out" "--harness 'claude' cannot be honored by a nio-chat relaunch" "the --harness refusal must name the recorded-thread bound"
+  [ "$(cat "$DATA/t1/brief.md")" = 'TASK BRIEF: try again with warmer colors.' ] \
+    || fail "a refused axis still touched the instructions"
+  pass "control: a nio relaunch refuses --model/--effort/foreign --harness instead of dropping them"
+}
+
+test_control_relaunch_carries_note_onto_recorded_thread() {
+  local out rc rec
+  nio_control_case control-relaunch-ok '{"task":"t1","thread":"th-1","thread_owner":"adopted","run_id":"run-1","status":"done","deadline":1,"started":1}'
+  nio_capable 1
+  nio_sse_completed run-2 th-1 warmer | nio_resp POST "$STREAM_PATH" 1
+  rc=0
+  out=$(run_control t1 relaunch --note 'continue from the second chart') || rc=$?
+  expect_code 0 "$rc" "the noted relaunch must succeed: $out"
+  assert_grep '## Progress note' "$DATA/t1/brief.md" "the relaunch must carry the note into the instructions"
+  assert_grep 'continue from the second chart' "$DATA/t1/brief.md" "the instructions must carry the note text"
+  assert_grep 'TASK BRIEF: try again with warmer colors.' "$DATA/t1/brief.md" "the original instructions must survive the note append"
+  rec=$(cat "$STATE/t1.niochat-run")
+  jq -e '.status == "streaming" and .thread == "th-1"' >/dev/null <<<"$rec" \
+    || fail "the relaunch must restart a run on the recorded thread: $rec"
+  assert_grep 'continue from the second chart' "$STATE/t1.control-relaunch.note" "the durable note record must carry the note"
+  pass "control: a nio relaunch carries the progress note into the instructions and re-dispatches on the recorded thread"
+}
+
+test_control_relaunch_spawn_refusal_restores_instructions() {
+  local out rc
+  nio_control_case control-relaunch-refused '{"task":"t1","thread":"th-1","thread_owner":"adopted","run_id":"run-1","status":"streaming","deadline":1,"started":1}'
+  cp -p "$DATA/t1/brief.md" "$CASE/brief.orig"
+  rc=0
+  out=$(run_control t1 relaunch --note 'this dispatch must be refused') || rc=$?
+  [ "$rc" -ne 0 ] || fail "a relaunch over a streaming run must be refused"
+  assert_contains "$out" 'still has a streaming nio-chat run' "the spawn plane's refusal must surface"
+  assert_contains "$out" 'instructions were restored' "the rollback must be reported"
+  cmp -s "$CASE/brief.orig" "$DATA/t1/brief.md" \
+    || fail "a refused relaunch left the note behind in the instructions"
+  [ -f "$STATE/t1.control-relaunch.brief-prior" ] \
+    || fail "the pre-relaunch instructions were not preserved as evidence"
+  pass "control: a spawn-plane refusal rolls the instructions back byte-exact"
+}
+
+
 # --- run ---------------------------------------------------------------------
 
 test_gate_off_by_default_and_refusal_before_dial
@@ -945,3 +1046,7 @@ test_run_state_fold
 test_ring_delivers_and_acknowledges
 test_adapter_send_text_delivers_on_the_typed_plane
 test_spawn_relaunch_adopts_thread_and_preserves_meta
+test_control_relaunch_requires_note_for_nio_scout
+test_control_relaunch_refuses_unhonorable_axes_for_nio
+test_control_relaunch_carries_note_onto_recorded_thread
+test_control_relaunch_spawn_refusal_restores_instructions
