@@ -606,17 +606,59 @@ status_open_decisions() {  # <status-file> [<kind>]
 
 # Resolve the log's current declaration at one boundary for crew-state consumers.
 # Any decision the fold still holds open wins over unrelated events, and the
-# fold's most recently opened record supplies it; the latest recognized event
-# stands when nothing is open.
+# fold's most recently opened record supplies it.
+# When nothing is open, the newest recognized event that reports crew STATE
+# stands: decision-closing verbs (resolved/captain-held) and already-closed
+# keyed waits never report state, so a trailing answer cannot mask the report
+# it answered, while unrecognized continuation prose is never an event and so
+# cannot bury a declaration (it is skipped exactly as last_status_line skips
+# it, never reported as state).
 # Actual run/pane evidence is still reconciled by fm-crew-state.sh.
 status_current_line() {  # <status-file> <kind>
-  local open key verb note current=''
+  local open key verb note current='' resolve held scan i line dkey
+  local -a events=()
   open=$(status_open_decisions "$1" "$2")
   while IFS=$'\t' read -r key verb note; do
     case "$verb" in ?*) current="$verb [key=$key]: $note" ;; esac
   done <<EOF
 $open
 EOF
+  if [ -z "$current" ]; then
+    # No decision stays open: walk the recognized events newest-first and stop
+    # at the first line that reports state. The open set is empty in this arm,
+    # so a keyed needs-decision/blocked line here is by definition closed and
+    # is skipped; a keyless or impostor-reserved-key ask folds as ordinary
+    # status and reports itself, exactly as last_state_status_line rules.
+    resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
+    held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
+    if [ -f "$1" ] && [ -r "$1" ]; then
+      while IFS= read -r line; do
+        [ -n "$line" ] && events+=("$line")
+      done <<EOF
+$(_fm_status_event_scan < "$1" 2>/dev/null || true)
+EOF
+    fi
+    i=${#events[@]}
+    while [ "$i" -gt 0 ]; do
+      i=$((i - 1))
+      line=${events[$i]}
+      verb=$(status_line_verb "$line")
+      case "$verb" in
+        "$resolve"|"$held") continue ;;
+        needs-decision|blocked)
+          dkey=$(_fm_decision_key "$line") || dkey=''
+          if [ -z "$dkey" ] || _fm_open_set_has "$open" "$dkey" \
+            || ! _fm_decision_key_transition_allowed "$dkey" "$(status_line_note "$line")"; then
+            current=$line
+            break
+          fi
+          continue
+          ;;
+      esac
+      current=$line
+      break
+    done
+  fi
   [ -n "$current" ] || current=$(last_status_line "$1")
   printf '%s\n' "$current"
 }
