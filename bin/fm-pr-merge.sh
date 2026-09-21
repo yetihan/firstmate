@@ -22,9 +22,10 @@
 # with the name as a separate argument; it waives only checks with that exact
 # name, still requires every other check green, and still binds the head. It is
 # refused while the away-posture record exists, and it never
-# applies on GitLab, where a merge already requires the head pipeline to have
-# succeeded. After gh returns success, GitHub's live state is read back and
-# accepted only when the pull request is merged or in the merge queue. gh's
+# applies on GitLab, where the head-pipeline check is waived only for a proven
+# no-CI project or by the attended-only --no-ci flag. After gh returns success,
+# GitHub's live state is read back and accepted only when the pull request is
+# merged or in the merge queue. gh's
 # GraphQL API supplies that queue-aware read; when that read fails, gh-axi's
 # own view still proves a landed merge, and every outcome it cannot prove
 # refuses, reporting the failed gh read and naming both failed reads when the
@@ -197,7 +198,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 if [ "${#ALLOW_RED[@]}" -gt 0 ] && [ "$PROVIDER" = gitlab ]; then
-  echo "error: --allow-red does not apply to GitLab, where a merge already requires the head pipeline to have succeeded" >&2
+  echo "error: --allow-red does not apply to GitLab, where the head-pipeline check is waived only for a proven no-CI project or by the attended-only --no-ci flag" >&2
   exit 2
 fi
 if [ "$FM_NO_CI" = true ] && [ "$PROVIDER" != gitlab ]; then
