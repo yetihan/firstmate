@@ -2625,17 +2625,23 @@ fi
   exit 1
 }
 if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
-  if fm_brief_task_placeholders_present "$BRIEF"; then
-    echo "error: $BRIEF still contains {TASK} or {FIRSTMATE_SPEC}; fill ## Captain's intent and ## Firstmate spec before spawn" >&2
-    exit 1
-  fi
-  if ! fm_brief_task_content_valid "$BRIEF"; then
-    echo "error: $BRIEF must contain nonempty ## Captain's intent and ## Firstmate spec subsections (or a nonempty legacy # Task body) before spawn" >&2
-    exit 1
-  fi
-  if ADDRESS_LINE=$(fm_brief_intent_address_line "$BRIEF"); then
-    echo "error: $BRIEF ## Captain's intent has an operator-address line: $ADDRESS_LINE; write the captain's actual words without a Captain label or address before spawn, since the heading already records provenance" >&2
-    exit 1
+  # The authoring checks below validate how the brief was written. A relaunch
+  # reuses the brief the task already ran with - its shape cannot have changed
+  # since the spawn that first admitted it - so re-litigating it here would
+  # only strand a legacy-brief crew that recovery can no longer relaunch.
+  if [ "$RELAUNCH" -eq 0 ]; then
+    if fm_brief_task_placeholders_present "$BRIEF"; then
+      echo "error: $BRIEF still contains {TASK} or {FIRSTMATE_SPEC}; fill ## Captain's intent and ## Firstmate spec before spawn" >&2
+      exit 1
+    fi
+    if ! fm_brief_task_content_valid "$BRIEF"; then
+      echo "error: $BRIEF must contain nonempty ## Captain's intent and ## Firstmate spec subsections (or a nonempty legacy # Task body) before spawn" >&2
+      exit 1
+    fi
+    if ADDRESS_LINE=$(fm_brief_intent_address_line "$BRIEF"); then
+      echo "error: $BRIEF ## Captain's intent has an operator-address line: $ADDRESS_LINE; write the captain's actual words without a Captain label or address before spawn, since the heading already records provenance" >&2
+      exit 1
+    fi
   fi
   if [ "$KIND" = ship ] && [ "$MODE" = no-mistakes ]; then
     if fm_brief_task_heading_present "$BRIEF" "## Captain's intent"; then
@@ -2643,7 +2649,7 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
     else
       LEGACY_TASK_BODY=$(fm_brief_heading_body "$BRIEF" "# Task")
       CAPTAIN_INTENT=$(fm_brief_marked_captain_words "$LEGACY_TASK_BODY")
-      if [ -z "$(printf '%s' "$CAPTAIN_INTENT" | tr -d '[:space:]')" ]; then
+      if [ "$RELAUNCH" -eq 0 ] && [ -z "$(printf '%s' "$CAPTAIN_INTENT" | tr -d '[:space:]')" ]; then
         echo "error: legacy mixed # Task brief has no provenance-marked captain words for no-mistakes --intent; add [captain] lines or migrate to ## Captain's intent and ## Firstmate spec" >&2
         exit 1
       fi
