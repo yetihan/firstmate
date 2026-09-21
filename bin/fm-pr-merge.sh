@@ -22,9 +22,10 @@
 # with the name as a separate argument; it waives only checks with that exact
 # name, still requires every other check green, and still binds the head. It is
 # refused while the away-posture record exists, and it never
-# applies on GitLab, where a merge already requires the head pipeline to have
-# succeeded. After gh returns success, GitHub's live state is read back and
-# accepted only when the pull request is merged or in the merge queue. gh's
+# applies on GitLab, where the head-pipeline check is waived only for a proven
+# no-CI project or by the attended-only --no-ci flag. After gh returns success,
+# GitHub's live state is read back and accepted only when the pull request is
+# merged or in the merge queue. gh's
 # GraphQL API supplies that queue-aware read; when that read fails, gh-axi's
 # own view still proves a landed merge, and every outcome it cannot prove
 # refuses, reporting the failed gh read and naming both failed reads when the
@@ -56,14 +57,28 @@
 #
 # A GitLab merge is refused unless every pre-merge condition holds, each read
 # live at merge time rather than taken from recorded metadata: the merge request
-# is open, detailed_merge_status is mergeable, has_conflicts is false,
-# blocking_discussions_resolved is true, and the head pipeline succeeded at the
-# exact current head commit. Every failing condition is reported, not just the
-# first. The verified head is then passed to glab as --sha, so a push that lands
-# between that read and the merge fails the merge instead of landing commits
-# nothing verified. A recorded pr_head that disagrees with the live head is
-# reported rather than trusted, because a rebase moves the head and leaves the
-# recorded value stale. Reading that state needs glab and jq, and either one
+# is open, detailed_merge_status is mergeable, has_conflicts is false, and
+# blocking_discussions_resolved is true. Every failing condition is reported,
+# not just the first. The fifth condition is the head pipeline, and it has
+# three states instead of two. A pipeline that succeeded at the exact current
+# head commit satisfies it as before. A project that genuinely has no CI
+# configuration can never produce a head pipeline, so treating an empty pipeline
+# the same as a failed one refuses every merge request on such a project
+# forever; when the pipeline check fails, gitlab_project_has_no_ci therefore
+# proves the absence from GitLab's own read-only project and repository APIs
+# (the project's ci_config_path setting, the referenced file's existence at the
+# verified head, or CI/CD disabled outright) before the pipeline conditions are
+# waived, and the verified line records the waiver and its basis so the exempt
+# merge stays auditable. An empty pipeline on a project that does have CI
+# configuration - skipped, deleted, or never run - proves nothing and still
+# refuses. An explicit --no-ci flag waives the pipeline conditions without the
+# probe; it is operator intent, never an implicit fallback, it is refused while
+# the away-posture record exists exactly like --allow-red, and it applies only
+# to GitLab. The verified head is then passed to glab as --sha, so a push that
+# lands between that read and the merge fails the merge instead of landing
+# commits nothing verified. A recorded pr_head that disagrees with the live head
+# is reported rather than trusted, because a rebase moves the head and leaves
+# the recorded value stale. Reading that state needs glab and jq, and either one
 # absent stops the merge before any state is recorded.
 #
 # Before either forge merge, the task's existing per-task control lock
@@ -99,7 +114,7 @@
 # explicit captain instruction and never skips the live green check, the
 # away-grant check, or a captain hold.
 #
-# Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--allow-red <check-name>] [-- <extra forge merge args>]
+# Usage: fm-pr-merge.sh <task-id> <pr-url> [--attended-override] [--allow-red <check-name>] [--no-ci] [-- <extra forge merge args>]
 #
 # On GitLab, this script confirms the MR is actually merged before reporting it;
 # an auto-merge-queued or unconfirmed request leaves the poll armed and records
@@ -148,6 +163,7 @@ PROJECT_URL="https://$FM_PR_HOST/$FM_PR_PATH"
 shift 2
 ATTENDED_OVERRIDE=false
 ALLOW_RED=()
+FM_NO_CI=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --attended-override)
@@ -168,12 +184,25 @@ while [ "$#" -gt 0 ]; do
       echo "error: --allow-red requires a separate check name argument" >&2
       exit 2
       ;;
+    --no-ci)
+      [ "$FM_NO_CI" = false ] || { echo "error: --no-ci may be specified only once" >&2; exit 2; }
+      FM_NO_CI=true
+      shift
+      ;;
+    --no-ci=*)
+      echo "error: --no-ci takes no value" >&2
+      exit 2
+      ;;
     --) shift; break ;;
     *) break ;;
   esac
 done
 if [ "${#ALLOW_RED[@]}" -gt 0 ] && [ "$PROVIDER" = gitlab ]; then
-  echo "error: --allow-red does not apply to GitLab, where a merge already requires the head pipeline to have succeeded" >&2
+  echo "error: --allow-red does not apply to GitLab, where the head-pipeline check is waived only for a proven no-CI project or by the attended-only --no-ci flag" >&2
+  exit 2
+fi
+if [ "$FM_NO_CI" = true ] && [ "$PROVIDER" != gitlab ]; then
+  echo "error: --no-ci waives the GitLab head-pipeline check and does not apply to $PROVIDER" >&2
   exit 2
 fi
 
@@ -259,6 +288,21 @@ reject_head_overrides() {
   done
 }
 
+# --no-ci is parsed by this script before the optional -- separator, so after
+# the separator it would reach the forge CLI as an unknown flag and fail there
+# with a worse error; it is refused here with the correct placement named.
+reject_no_ci_in_extra_args() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      --no-ci|--no-ci=*)
+        echo "error: --no-ci is an fm-pr-merge flag and must appear before the -- separator" >&2
+        return 1
+        ;;
+    esac
+  done
+}
+
 reject_protected_forge_args() {
   local arg
   [ "$ATTENDED_OVERRIDE" = true ] && return 0
@@ -281,6 +325,7 @@ reject_protected_forge_args() {
 
 reject_repo_overrides "$@" || exit 1
 reject_head_overrides "$@" || exit 1
+reject_no_ci_in_extra_args "$@" || exit 1
 reject_protected_forge_args "$@" || exit 1
 
 FM_PR_GITHUB_AUTO_REQUESTED=false
@@ -391,6 +436,7 @@ gitlab_verify_mergeable() {
   local total=0 named=0 refusals=''
   local state='' detail='' conflicts='' discussions=''
   local live_head='' pipeline_sha='' pipeline_status='' async_configured=''
+  local ci_waiver=''
 
   # GITLAB_HOST is set to the same host the project URL already carries, so the
   # instance is taken from the parsed URL by both signals and never from the
@@ -468,22 +514,122 @@ FIELDS
   [ "$discussions" = true ] \
     || refusals="$refusals  - blocking_discussions_resolved is \"${discussions:-unreadable}\", not true
 "
-  [ "$pipeline_status" = success ] \
-    || refusals="$refusals  - the head pipeline status is \"${pipeline_status:-none}\", not success
+  # The pipeline gate is three-state. A successful pipeline at the head passes
+  # as before; when it fails, the pipeline conditions are waived only on proof
+  # that the project can never produce one, never on the empty pipeline alone.
+  ci_waiver=''
+  if [ "$pipeline_status" != success ] || [ "$pipeline_sha" != "$live_head" ]; then
+    if [ "$FM_NO_CI" = true ]; then
+      ci_waiver='the explicit --no-ci flag'
+    elif gitlab_project_has_no_ci "$live_head"; then
+      ci_waiver=$GITLAB_NO_CI_BASIS
+    fi
+  fi
+  if [ -z "$ci_waiver" ]; then
+    [ "$pipeline_status" = success ] \
+      || refusals="$refusals  - the head pipeline status is \"${pipeline_status:-none}\", not success
 "
-  [ "$pipeline_sha" = "$live_head" ] \
-    || refusals="$refusals  - the head pipeline ran at \"${pipeline_sha:-none}\", not at the current head $live_head
+    [ "$pipeline_sha" = "$live_head" ] \
+      || refusals="$refusals  - the head pipeline ran at \"${pipeline_sha:-none}\", not at the current head $live_head
 "
+  fi
 
   if [ -n "$refusals" ]; then
     printf 'error: refusing to merge %s\n' "$URL" >&2
     printf '%s' "$refusals" >&2
     return 1
   fi
-  printf 'verified: %s is open and mergeable, with a successful pipeline at head %s\n' \
-    "$URL" "$live_head" >&2
+  if [ -n "$ci_waiver" ]; then
+    if [ "$FM_NO_CI" = true ]; then
+      printf 'verified: %s is open and mergeable; the head-pipeline check is waived by the explicit --no-ci flag; head %s\n' \
+        "$URL" "$live_head" >&2
+    else
+      printf 'verified: %s is open and mergeable; the project has no CI configuration, so the head-pipeline check is waived (%s); head %s\n' \
+        "$URL" "$ci_waiver" "$live_head" >&2
+    fi
+  else
+    printf 'verified: %s is open and mergeable, with a successful pipeline at head %s\n' \
+      "$URL" "$live_head" >&2
+  fi
   FM_PR_MERGE_HEAD=$live_head
   FM_PR_GITLAB_ASYNC_CONFIGURED=$async_configured
+}
+
+# Read-only proof that a GitLab project can never produce a head pipeline,
+# consulted only when the pipeline check failed. Returns zero and sets
+# GITLAB_NO_CI_BASIS to a human-auditable phrase only on positive proof from
+# GitLab's own APIs; every unreadable, ambiguous, or externally-referenced
+# answer returns non-zero, because this waiver exists for the genuinely no-CI
+# project and a doubt must refuse rather than waive. The check runs at the
+# verified head, where the pipeline itself would have run.
+GITLAB_NO_CI_BASIS=
+gitlab_project_has_no_ci() {
+  local head=$1 json fields line headers status
+  local total=0 named=0
+  local config_path='' builds_access=''
+  local encoded_project encoded_config
+
+  GITLAB_NO_CI_BASIS=
+  # GITLAB_HOST carries the parsed instance, exactly as in the merge-request
+  # read, and the project path from the URL fills the :id slot encoded.
+  encoded_project=$(urlencode_path_segment "$PR_PATH")
+  if ! json=$(GITLAB_HOST="$FM_PR_HOST" glab api "projects/$encoded_project" 2>/dev/null) \
+    || [ -z "$json" ]; then
+    return 1
+  fi
+  if ! fields=$(printf '%s' "$json" | jq -r '
+      if type == "object" then
+        "ci_config_path=" + ((.ci_config_path // "") | tostring),
+        "builds_access_level=" + ((.builds_access_level // "") | tostring)
+      else
+        error("project payload is not an object")
+      end' 2>/dev/null); then
+    return 1
+  fi
+  while IFS= read -r line; do
+    total=$((total + 1))
+    case "$line" in
+      ci_config_path=*) config_path=${line#ci_config_path=} ;;
+      builds_access_level=*) builds_access=${line#builds_access_level=} ;;
+      *) continue ;;
+    esac
+    named=$((named + 1))
+  done <<FIELDS
+$fields
+FIELDS
+  if [ "$named" -ne 2 ] || [ "$total" -ne 2 ]; then
+    return 1
+  fi
+
+  # Pipelines disabled at the project level never run, whatever the repository
+  # contains, so no head pipeline can ever appear.
+  if [ "$builds_access" = disabled ]; then
+    GITLAB_NO_CI_BASIS="CI/CD pipelines are disabled at the project level (builds_access_level=disabled)"
+    return 0
+  fi
+  # A null or empty ci_config_path is GitLab's default location. A path that
+  # points at another project ('dir/file.yml@other/project') or at a URL can
+  # still feed pipelines, and its absence from this repository proves nothing,
+  # so only a repository-local path can ground a no-CI finding.
+  [ -n "$config_path" ] || config_path=.gitlab-ci.yml
+  case "$config_path" in
+    *@*|*://*) return 1 ;;
+  esac
+  encoded_config=$(urlencode_path_segment "$config_path")
+  # -i keeps the status line in the output even though a 404 exits non-zero,
+  # so a missing file is told apart from an auth, server, or network failure
+  # and only the proven 404 waives the pipeline check.
+  headers=
+  # The command substitution still captures what -i printed when glab exits
+  # non-zero, so the status line survives the 404; only its exit code is ignored.
+  headers=$(GITLAB_HOST="$FM_PR_HOST" glab api -i \
+    "projects/$encoded_project/repository/files/$encoded_config?ref=$head" 2>/dev/null) || true
+  status=$(printf '%s' "$headers" | awk '$1 ~ /^HTTP\// && $2 ~ /^[0-9][0-9][0-9]$/ { print $2; exit }')
+  if [ "$status" = 404 ]; then
+    GITLAB_NO_CI_BASIS="the project's CI config path '$config_path' is absent from the repository at head $head"
+    return 0
+  fi
+  return 1
 }
 
 # Every GitHub check that is not green in the given live pull-request JSON, one
@@ -763,7 +909,12 @@ github_read_outcome() {
   return 1
 }
 
-github_urlencode_path_segment() {
+# Percent-encode one path so it fills a single URL segment slot: every byte
+# outside the unreserved set becomes %XX, and '/' is encoded, so a multi-level
+# GitLab project path or a nested CI config path can stand in for a :id or
+# :file_path parameter. GitHub uses it for a branch name; GitLab uses it for
+# project and file paths.
+urlencode_path_segment() {
   local LC_ALL=C input=$1 encoded='' char octet hex
   while [ -n "$input" ]; do
     char=${input%"${input#?}"}
@@ -797,7 +948,7 @@ github_read_queue_method() {
   FM_PR_GITHUB_QUEUE_STATUS=unreadable
   command -v gh >/dev/null 2>&1 || return 0
   [ -n "$FM_PR_GITHUB_BASE" ] || return 0
-  branch_path=$(github_urlencode_path_segment "$FM_PR_GITHUB_BASE")
+  branch_path=$(urlencode_path_segment "$FM_PR_GITHUB_BASE")
   api_err=$(mktemp "${TMPDIR:-/tmp}/fm-pr-merge-queue-rules.XXXXXX") || return 0
   if ! methods=$(gh api \
     --paginate "repos/$PR_OWNER/$PR_REPO/rules/branches/$branch_path" \
@@ -940,6 +1091,12 @@ require_current_away_authority() {
   require_away_merge_grant || return 1
   if [ "$FM_PR_AWAY_POSTURE" = true ] && [ "${#ALLOW_RED[@]}" -gt 0 ]; then
     echo "error: --allow-red is attended-only; while the away-posture record exists the green check is absolute" >&2
+    return 2
+  fi
+  # The probe-grounded no-CI waiver below stays available while away because it
+  # is a read-only proof that there is no pipeline to check, not a waiver of one.
+  if [ "$FM_PR_AWAY_POSTURE" = true ] && [ "$FM_NO_CI" = true ]; then
+    echo "error: --no-ci is attended-only; while the away-posture record exists the pipeline check is absolute" >&2
     return 2
   fi
 }

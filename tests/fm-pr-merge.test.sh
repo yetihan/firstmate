@@ -278,6 +278,23 @@ case "${1:-} ${2:-}" in
     : > "$case_dir/glab-merge-called"
     exit 0
     ;;
+  api\ *)
+    [ ! -e "$case_dir/glab-api-fails" ] || { echo 'error: api request failed' >&2 ; exit 1 ; }
+    case " $* " in
+      *"repository/files/"*)
+        if [ -e "$case_dir/glab-ci-file-absent" ]; then
+          printf 'HTTP/2.0 404 Not Found\n\n{"message":"404 Not Found"}\n'
+          exit 1
+        fi
+        printf 'HTTP/2.0 200 OK\n\n{"file_path":".gitlab-ci.yml"}\n'
+        exit 0
+        ;;
+      *)
+        cat "$case_dir/glab-project.json"
+        exit 0
+        ;;
+    esac
+    ;;
 esac
 exit 0
 SH
@@ -336,6 +353,11 @@ make_gitlab_case() {
   : > "$case_dir/glab.log"
   write_mr_json "$case_dir/mr.json" "$@"
   write_mr_json "$case_dir/mr-post.json" state=merged
+  # A project with CI configured the default way: pipelines enabled and the
+  # default ci_config_path. The glab mock serves this for every api call that
+  # is not a repository file probe, and its markers drive the failure modes.
+  printf '%s\n' '{"ci_config_path":null,"builds_access_level":"enabled"}' \
+    > "$case_dir/glab-project.json"
   printf '%s\n' "$case_dir"
 }
 
@@ -1823,6 +1845,219 @@ test_gitlab_head_override_args_refuse_before_recording() {
   pass "fm-pr-merge refuses a GitLab head override before recording state"
 }
 
+# The third pipeline state: a project that genuinely has no CI configuration can
+# never produce a head pipeline, so once GitLab's own read-only APIs prove the
+# absence, the pipeline conditions are waived and the merge runs with the other
+# conditions and the head binding exactly as a green-pipeline merge does.
+test_gitlab_no_ci_project_merges_without_pipeline() {
+  local case_dir rc merge_line
+
+  # Default ci_config_path, file absent at the head: the original no-CI shape.
+  case_dir=$(make_gitlab_case gitlab-no-ci-default pipeline=null)
+  : > "$case_dir/glab-ci-file-absent"
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "gitlab-no-ci-default: a no-CI project should merge once the absence is proven"
+  assert_grep 'the project has no CI configuration, so the head-pipeline check is waived' \
+    "$case_dir/stderr" "gitlab-no-ci-default: the waiver was not reported on the verified line"
+  assert_grep "the project's CI config path '.gitlab-ci.yml' is absent from the repository at head $MR_HEAD" \
+    "$case_dir/stderr" "gitlab-no-ci-default: the verified line did not name the waiver's basis"
+  assert_grep "GITLAB_HOST=$MR_HOST api projects/group%2Fsubgroup%2Fproject" "$case_dir/glab.log" \
+    "gitlab-no-ci-default: the project settings were not read from the parsed path"
+  assert_grep "GITLAB_HOST=$MR_HOST api -i projects/group%2Fsubgroup%2Fproject/repository/files/.gitlab-ci.yml?ref=$MR_HEAD" \
+    "$case_dir/glab.log" \
+    "gitlab-no-ci-default: the config file was not probed at the verified head"
+  merge_line=$(glab_merge_line "$case_dir/glab.log")
+  [ "$merge_line" = "GITLAB_HOST=$MR_HOST mr merge 7 -R $MR_PROJECT_URL --sha $MR_HEAD --yes" ] \
+    || fail "gitlab-no-ci-default: the exempt merge was not bound to the verified head: '$merge_line'"
+
+  # A custom ci_config_path names that path in the waiver's basis.
+  case_dir=$(make_gitlab_case gitlab-no-ci-custom-path pipeline=null)
+  : > "$case_dir/glab-ci-file-absent"
+  printf '%s\n' '{"ci_config_path":"config/ci.yml","builds_access_level":"enabled"}' \
+    > "$case_dir/glab-project.json"
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "gitlab-no-ci-custom-path: a no-CI project with a custom config path should merge"
+  assert_grep "the project's CI config path 'config/ci.yml' is absent" "$case_dir/stderr" \
+    "gitlab-no-ci-custom-path: the waiver's basis did not name the custom path"
+  assert_grep 'repository/files/config%2Fci.yml?ref=' "$case_dir/glab.log" \
+    "gitlab-no-ci-custom-path: the custom path was not probed encoded"
+
+  # CI/CD disabled at the project level waives even when a config file exists.
+  case_dir=$(make_gitlab_case gitlab-no-ci-disabled pipeline=null)
+  printf '%s\n' '{"ci_config_path":null,"builds_access_level":"disabled"}' \
+    > "$case_dir/glab-project.json"
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "gitlab-no-ci-disabled: a CI-disabled project should merge"
+  assert_grep 'CI/CD pipelines are disabled at the project level (builds_access_level=disabled)' \
+    "$case_dir/stderr" "gitlab-no-ci-disabled: the waiver's basis did not name the disabled setting"
+  assert_no_grep 'repository/files/' "$case_dir/glab.log" \
+    "gitlab-no-ci-disabled: the file was probed even though the setting already proved the absence"
+  pass "fm-pr-merge waives the pipeline check only on a proven no-CI GitLab project and reports the basis"
+}
+
+# The waiver is a pipeline-only exemption: the other pre-merge conditions are
+# still enforced, and a waived pipeline failure must not appear in the refusal.
+test_gitlab_no_ci_still_enforces_other_conditions() {
+  local case_dir rc
+  case_dir=$(make_gitlab_case gitlab-no-ci-other-conditions pipeline=null state=closed)
+  : > "$case_dir/glab-ci-file-absent"
+
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "gitlab-no-ci-other-conditions: a closed merge request must refuse even without CI"
+  assert_grep 'state is "closed", not open' "$case_dir/stderr" \
+    "gitlab-no-ci-other-conditions: the surviving condition was not named"
+  assert_no_grep 'head pipeline' "$case_dir/stderr" \
+    "gitlab-no-ci-other-conditions: a waived pipeline condition was still listed as a failure"
+  [ -z "$(glab_merge_line "$case_dir/glab.log")" ] \
+    || fail "gitlab-no-ci-other-conditions: a merge was attempted despite the surviving refusal"
+  pass "fm-pr-merge keeps every non-pipeline condition in force on a no-CI GitLab project"
+}
+
+# A doubt refuses. An unreadable project settings call, and a ci_config_path
+# that points at another project (whose absence from this repository proves
+# nothing), must both keep the pipeline refusal in place.
+test_gitlab_no_ci_doubt_refuses() {
+  local case_dir rc
+
+  case_dir=$(make_gitlab_case gitlab-no-ci-api-fails pipeline=null)
+  : > "$case_dir/glab-ci-file-absent"
+  : > "$case_dir/glab-api-fails"
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "gitlab-no-ci-api-fails: an unprovable absence must refuse"
+  assert_grep 'the head pipeline status is "none", not success' "$case_dir/stderr" \
+    "gitlab-no-ci-api-fails: the pipeline refusal was not kept when the probe could not run"
+  [ -z "$(glab_merge_line "$case_dir/glab.log")" ] \
+    || fail "gitlab-no-ci-api-fails: a merge was attempted on an unproven absence"
+
+  case_dir=$(make_gitlab_case gitlab-no-ci-external-path pipeline=null)
+  : > "$case_dir/glab-ci-file-absent"
+  printf '%s\n' '{"ci_config_path":"shared/ci.yml@other/group","builds_access_level":"enabled"}' \
+    > "$case_dir/glab-project.json"
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "gitlab-no-ci-external-path: an external config path must refuse"
+  assert_grep 'the head pipeline status is "none", not success' "$case_dir/stderr" \
+    "gitlab-no-ci-external-path: an external config path was read as provable absence"
+  assert_no_grep 'repository/files/' "$case_dir/glab.log" \
+    "gitlab-no-ci-external-path: this repository was probed for another project's config"
+  [ -z "$(glab_merge_line "$case_dir/glab.log")" ] \
+    || fail "gitlab-no-ci-external-path: a merge was attempted on an external config path"
+  pass "fm-pr-merge refuses a no-CI claim it cannot prove from GitLab's own APIs"
+}
+
+# The explicit --no-ci flag: explicit operator intent, never an implicit
+# fallback. It waives the pipeline conditions without consulting the project,
+# it is refused while away exactly like --allow-red, and every misplaced or
+# misspelled form refuses before anything is recorded.
+test_gitlab_no_ci_flag() {
+  local case_dir rc merge_line
+
+  # Valid use: a project that has CI but failed it, waived by explicit intent.
+  case_dir=$(make_gitlab_case gitlab-no-ci-flag pipeline_status=failed)
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" --no-ci \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "gitlab-no-ci-flag: an explicit --no-ci should waive a failed pipeline"
+  assert_grep 'the head-pipeline check is waived by the explicit --no-ci flag' "$case_dir/stderr" \
+    "gitlab-no-ci-flag: the verified line did not name the flag waiver"
+  merge_line=$(glab_merge_line "$case_dir/glab.log")
+  [ "$merge_line" = "GITLAB_HOST=$MR_HOST mr merge 7 -R $MR_PROJECT_URL --sha $MR_HEAD --yes" ] \
+    || fail "gitlab-no-ci-flag: the exempt merge was not bound to the verified head: '$merge_line'"
+  assert_no_grep ' api ' "$case_dir/glab.log" \
+    "gitlab-no-ci-flag: the project was probed even though the flag waived the check"
+
+  # Every misuse form refuses before recording or merging.
+  case_dir=$(make_case no-ci-github)
+  mkdir -p "$case_dir/wt"
+  add_gh_mocks "$case_dir" 5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+  : > "$case_dir/gh-axi.log"
+  set +e
+  run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/21 --no-ci \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "no-ci-github: --no-ci on GitHub must refuse"
+  assert_grep '--no-ci waives the GitLab head-pipeline check and does not apply to github' \
+    "$case_dir/stderr" "no-ci-github: refusal did not name GitHub"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" \
+    "no-ci-github: gh pr merge ran despite --no-ci"
+
+  case_dir=$(make_gitlab_case no-ci-equals)
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" --no-ci=1 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "no-ci-equals: a valued --no-ci must refuse"
+  assert_grep 'error: --no-ci takes no value' "$case_dir/stderr" \
+    "no-ci-equals: refusal did not name the value form"
+
+  case_dir=$(make_gitlab_case no-ci-duplicate)
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" --no-ci --no-ci \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "no-ci-duplicate: a doubled --no-ci must refuse"
+  assert_grep 'error: --no-ci may be specified only once' "$case_dir/stderr" \
+    "no-ci-duplicate: refusal did not name the duplicate"
+
+  case_dir=$(make_gitlab_case no-ci-after-separator)
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" -- --no-ci \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "no-ci-after-separator: --no-ci after -- must refuse"
+  assert_grep 'must appear before the -- separator' "$case_dir/stderr" \
+    "no-ci-after-separator: refusal did not name the correct placement"
+  assert_no_grep "pr=$MR_URL" "$case_dir/state/task-x1.meta" \
+    "no-ci-after-separator: the URL was recorded before rejecting the misplaced flag"
+  [ ! -s "$case_dir/glab.log" ] \
+    || fail "no-ci-after-separator: glab ran despite the misplaced flag"
+
+  case_dir=$(make_gitlab_case no-ci-away pipeline_status=failed)
+  write_away_record "$case_dir" --grant task-x1
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" --no-ci \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "no-ci-away: --no-ci must be attended-only"
+  assert_grep '--no-ci is attended-only' "$case_dir/stderr" \
+    "no-ci-away: refusal did not name attended-only"
+  [ -z "$(glab_merge_line "$case_dir/glab.log")" ] \
+    || fail "no-ci-away: glab received a merge under away --no-ci"
+  pass "fm-pr-merge treats --no-ci as explicit attended-only intent and refuses every misuse"
+}
+
+
 test_github_still_forwards_sha_arg() {
   local case_dir rc
   case_dir=$(make_case github-sha-arg)
@@ -3107,3 +3342,7 @@ test_away_record_cannot_change_between_the_authority_read_and_the_merge
 test_a_grant_revoked_before_the_merge_refuses_it
 test_merge_refuses_when_the_away_record_cannot_be_locked
 test_allow_red_refused_on_gitlab
+test_gitlab_no_ci_project_merges_without_pipeline
+test_gitlab_no_ci_still_enforces_other_conditions
+test_gitlab_no_ci_doubt_refuses
+test_gitlab_no_ci_flag
