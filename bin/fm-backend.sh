@@ -65,8 +65,14 @@ FM_BACKEND_CONFIG_DIR="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 # spawn-capable; unlike tmux/herdr/zellij it is also the worktree provider.
 # cmux is EXPERIMENTAL and spawn-capable, session-provider-only like
 # herdr/zellij - verified against the real 0.64.17 binary (docs/cmux-backend.md).
+# nio-chat is EXPERIMENTAL, not a terminal multiplexer at all: it bridges the
+# generic per-op dispatchers to the NIO Chat desktop agent runtime
+# (bin/fm-niochat-lib.sh; docs/nio-chat-agent-backend.md), whose target string
+# is the virtual task label fm-<id>. It is known but NOT spawn-listed:
+# nio-chat tasks dispatch through bin/fm-spawn.sh's dedicated nio-chat branch,
+# not the pane-launch path the spawn list gates.
 # codex-app remains deliberately absent; see docs/codex-app-backend.md.
-FM_BACKEND_KNOWN="tmux herdr zellij orca cmux"
+FM_BACKEND_KNOWN="tmux herdr zellij orca cmux nio-chat"
 FM_BACKEND_SPAWN="tmux herdr zellij orca cmux"
 
 # fm_backend_list_contains: whitespace-delimited membership without relying on
@@ -315,6 +321,7 @@ fm_backend_required_tools() {  # <backend>
     zellij) printf '%s' 'zellij jq treehouse' ;;
     cmux)   printf '%s' 'cmux jq treehouse' ;;
     orca)   printf '%s' 'orca' ;;
+    nio-chat) printf '%s' 'jq curl' ;;
     *) return 1 ;;
   esac
 }
@@ -388,6 +395,62 @@ fm_backend_endpoint_atom_valid() {  # <value>
   esac
 }
 
+# fm_backend_validate_niochat_endpoint: the nio-chat branch of task-endpoint
+# validation. A nio-chat task has no pane and no worktree - its endpoint is
+# the agent thread recorded in external_ref and the virtual task label
+# fm-<id> recorded in window - so it validates INSTEAD of the generic
+# window/worktree/project requirements, not on top of them. The binding,
+# backend uniqueness, and atom rules stay exactly as strict.
+fm_backend_validate_niochat_endpoint() {  # <meta-file> <task-id>
+  local meta=$1 id=$2 backend_count thread window binding
+  backend_count=$(grep -c '^backend=' "$meta" 2>/dev/null || true)
+  [ "$backend_count" -eq 1 ] || {
+    echo "REFUSED: task $id has an ambiguous nio-chat backend identity; preserving task state." >&2
+    return 1
+  }
+  [ "$(fm_meta_get "$meta" backend)" = nio-chat ] || {
+    echo "REFUSED: task $id endpoint metadata does not record backend nio-chat; preserving task state." >&2
+    return 1
+  }
+  binding=$(fm_backend_meta_exact_value "$meta" endpoint_task_id) || {
+    echo "REFUSED: task $id has a missing, empty, or ambiguous endpoint task binding; preserving task state." >&2
+    return 1
+  }
+  [ "$binding" = "$id" ] || {
+    echo "REFUSED: endpoint metadata belongs to task $binding, not $id; preserving task state." >&2
+    return 1
+  }
+  thread=$(fm_backend_meta_exact_value "$meta" external_ref) || {
+    echo "REFUSED: task $id has a missing, empty, or ambiguous nio-chat thread reference (external_ref); preserving task state." >&2
+    return 1
+  }
+  window=$(fm_backend_meta_exact_value "$meta" window) || {
+    echo "REFUSED: task $id has a missing or ambiguous window label; preserving task state." >&2
+    return 1
+  }
+  [ "$window" = "fm-$id" ] || {
+    echo "REFUSED: nio-chat endpoint '$window' does not match the task label fm-$id; preserving task state." >&2
+    return 1
+  }
+  if ! fm_backend_endpoint_atom_valid "$thread"; then
+    echo "REFUSED: task $id has a malformed nio-chat thread reference; preserving task state." >&2
+    return 1
+  fi
+  local forbidden key
+  for key in worktree project; do
+    forbidden=$(grep -c "^$key=" "$meta" 2>/dev/null || true)
+    [ "$forbidden" -eq 0 ] || {
+      echo "REFUSED: nio-chat task $id unexpectedly records a $key endpoint; preserving task state." >&2
+      return 1
+    }
+  done
+  # shellcheck disable=SC2034 # Output globals are consumed by sourcing callers.
+  FM_BACKEND_VALIDATED_BACKEND=nio-chat
+  # shellcheck disable=SC2034 # Output globals are consumed by sourcing callers.
+  FM_BACKEND_VALIDATED_TARGET=$window
+  return 0
+}
+
 # An Orca worktree id is the composite `<orca id>::<absolute worktree path>`
 # that Orca itself returns, so the `:` and `/` characters every real value
 # carries make the simple-atom check reject it. Firstmate hands the id back to
@@ -420,6 +483,12 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
     echo "REFUSED: task endpoint identity has an invalid task id; preserving task state." >&2
     return 1
   esac
+  # A nio-chat task records no pane and no worktree, so it validates through
+  # its own branch instead of the generic window/worktree/project contract.
+  if [ "$(fm_meta_get "$meta" backend)" = nio-chat ]; then
+    fm_backend_validate_niochat_endpoint "$meta" "$id"
+    return $?
+  fi
   window=$(fm_backend_meta_exact_value "$meta" window) || {
     echo "REFUSED: task $id has a missing, empty, or ambiguous window endpoint; preserving task state." >&2
     return 1
@@ -655,6 +724,13 @@ fm_backend_source() {  # <name>
         _FM_BACKEND_CMUX_SOURCED=1
       fi
       ;;
+    nio-chat)
+      if [ -z "${_FM_BACKEND_NIOCHAT_SOURCED:-}" ]; then
+        # shellcheck source=/dev/null
+        . "$FM_BACKEND_LIB_DIR/backends/nio-chat.sh" || return 1
+        _FM_BACKEND_NIOCHAT_SOURCED=1
+      fi
+      ;;
   esac
 }
 
@@ -726,6 +802,7 @@ fm_backend_capture() {  # <backend> <target> <lines> [expected-label]
     zellij) fm_backend_zellij_capture "$@" ;;
     orca) fm_backend_orca_capture "$@" ;;
     cmux) fm_backend_cmux_capture "$@" ;;
+    nio-chat) fm_backend_niochat_capture "$@" ;;
     *) echo "error: no capture implementation for backend '$backend'" >&2; return 1 ;;
   esac
 }
@@ -788,6 +865,7 @@ fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> <enter-sl
     zellij) fm_backend_zellij_send_text_submit "$@" ;;
     orca) fm_backend_orca_send_text_submit "$@" ;;
     cmux) fm_backend_cmux_send_text_submit "$@" ;;
+    nio-chat) fm_backend_niochat_send_text_submit "$@" ;;
     *) echo "error: no send-text implementation for backend '$backend'" >&2; return 1 ;;
   esac
 }
@@ -815,6 +893,7 @@ fm_backend_kill() {  # <backend> <target>
     zellij) fm_backend_zellij_kill "$@" ;;
     orca) fm_backend_orca_kill "$@" ;;
     cmux) fm_backend_cmux_kill "$@" ;;
+    nio-chat) fm_backend_niochat_kill "$@" ;;
     *) echo "error: no kill implementation for backend '$backend'" >&2; return 1 ;;
   esac
 }
@@ -852,6 +931,7 @@ fm_backend_busy_state() {  # <backend> <target>
   fm_backend_source "$backend" || { printf 'unknown'; return 0; }
   case "$backend" in
     herdr) fm_backend_herdr_busy_state "$@" ;;
+    nio-chat) fm_backend_niochat_busy_state "$@" ;;
     *) printf 'unknown' ;;
   esac
 }
@@ -927,6 +1007,10 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
       fm_backend_source cmux || return 1
       fm_backend_cmux_target_ready "$target" "$expected_label"
       ;;
+    nio-chat)
+      fm_backend_source nio-chat || return 1
+      fm_backend_niochat_target_exists "$target"
+      ;;
     *)
       return 1
       ;;
@@ -959,6 +1043,7 @@ fm_backend_agent_state() {  # <backend> <target>
   case "$backend" in
     tmux) fm_backend_tmux_agent_state "$target" ;;
     herdr) fm_backend_herdr_agent_state "$target" ;;
+    nio-chat) fm_backend_niochat_agent_state "$target" ;;
     *) printf 'unverified' ;;
   esac
 }

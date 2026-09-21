@@ -1462,6 +1462,9 @@ RAW_LAUNCH=0
 # validation teardown uses, so a malformed, ambiguous, or foreign record
 # refuses here exactly as it refuses there.
 RELAUNCH_PRIOR_HARNESS=
+# A nio-chat relaunch adopts the recorded agent thread instead of creating one;
+# empty means a fresh dispatch creates the thread (docs/nio-chat-agent-backend.md).
+RELAUNCH_NIO_THREAD=
 if [ "$RELAUNCH" -eq 1 ]; then
   [ "${#POS[@]}" -eq 1 ] || {
     echo "error: --relaunch takes the task id only; its project or home comes from the task's own record" >&2
@@ -1486,6 +1489,33 @@ if [ "$RELAUNCH" -eq 1 ]; then
   fm_backend_validate_task_endpoint "$RELAUNCH_META" "$ID" || exit 1
   BACKEND=$FM_BACKEND_VALIDATED_BACKEND
   RELAUNCH_TARGET=$FM_BACKEND_VALIDATED_TARGET
+  if [ "$BACKEND" = nio-chat ]; then
+    # A nio-chat relaunch re-adopts the recorded agent thread. There is no
+    # pane process to prove gone; the recovery-grade equivalent is the local
+    # run record, whose streaming state IS a live run on the endpoint, and a
+    # present record (even settled) is the endpoint itself.
+    fm_backend_source "$BACKEND" || exit 1
+    RELAUNCH_STATE=$(fm_backend_agent_state "$BACKEND" "$RELAUNCH_TARGET")
+    [ "$RELAUNCH_STATE" != alive ] || {
+      echo "error: task $ID still has a streaming nio-chat run; settle it first (bin/fm-control.sh $ID exit) before relaunching" >&2
+      exit 1
+    }
+    RELAUNCH_PRIOR_HARNESS=$(fm_meta_get "$RELAUNCH_META" harness)
+    KIND=$(fm_meta_get "$RELAUNCH_META" kind)
+    [ -n "$KIND" ] || KIND=ship
+    MODE=$(fm_meta_get "$RELAUNCH_META" mode)
+    YOLO=$(fm_meta_get "$RELAUNCH_META" yolo)
+    RELAUNCH_NIO_THREAD=$(fm_meta_get "$RELAUNCH_META" external_ref)
+    [ -n "$RELAUNCH_NIO_THREAD" ] || {
+      echo "error: task $ID has no recorded nio-chat thread (external_ref); refusing to relaunch" >&2
+      exit 1
+    }
+    ARG3=${HARNESS_ARG:-$RELAUNCH_PRIOR_HARNESS}
+    [ -n "$ARG3" ] || {
+      echo "error: task $ID has no recorded harness; pass --harness to relaunch it" >&2
+      exit 1
+    }
+  else
   fm_backend_validate_spawn "$BACKEND" || exit 1
   fm_backend_source "$BACKEND" || exit 1
   # A relaunch must PROVE the previous agent is gone before it launches another
@@ -1537,6 +1567,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
     echo "error: task $ID has no recorded harness; pass --harness to relaunch it" >&2
     exit 1
   }
+  fi
 elif [ "$KIND" = secondmate ]; then
   case "${POS[1]:-}" in
   '' | claude | codex | opencode | pi | pi-signed | grok | kimi | cursor | gemini | muse | rovo | omp | agy)
@@ -1556,8 +1587,15 @@ elif [ "$KIND" = secondmate ]; then
     ;;
   esac
 else
-  PROJ=${POS[1]}
-  ARG3=${POS[2]:-}
+  if [ "${HARNESS_ARG:-}" = nio-chat-agent ]; then
+    # A nio-chat scout is projectless: its whole deliverable is the agent's
+    # answer, so there is no project positional to read, and the harness is
+    # always named explicitly (ARG3 below picks that up).
+    :
+  else
+    PROJ=${POS[1]}
+    ARG3=${POS[2]:-}
+  fi
 fi
 [ -z "$HARNESS_ARG" ] || ARG3=$HARNESS_ARG
 
@@ -1938,10 +1976,18 @@ case "$ARG3" in
   ;;
 *)
   HARNESS=$ARG3
-  LAUNCH=$(launch_template "$HARNESS" "$KIND") || {
-    echo "error: unknown harness '$HARNESS'; pass a raw launch command to use an unverified adapter" >&2
-    exit 1
-  }
+  # nio-chat-agent has no pane launch: its dedicated dispatch branch below
+  # owns the whole endpoint. LAUNCH stays empty so no generic launch path
+  # can ever run for it, and a config-resolved selection can never reach it
+  # (only this explicit-harness arm names it).
+  if [ "$HARNESS" = nio-chat-agent ]; then
+    LAUNCH=
+  else
+    LAUNCH=$(launch_template "$HARNESS" "$KIND") || {
+      echo "error: unknown harness '$HARNESS'; pass a raw launch command to use an unverified adapter" >&2
+      exit 1
+    }
+  fi
   ;;
 esac
 
@@ -1959,6 +2005,16 @@ esac
 # docs/supervision-protocols/ carries no agy wake protocol (agy 1.2.0).
 if [ "$KIND" = secondmate ] && { [ "$HARNESS" = muse ] || [ "$HARNESS" = gemini ] || [ "$HARNESS" = agy ]; }; then
   echo "error: $HARNESS is a verified crewmate/scout adapter only and cannot run a secondmate; it has no primary supervision protocol. Select a harness verified for secondmates." >&2
+  exit 1
+fi
+
+# nio-chat-agent is a scout-only answer runtime: its deliverable is the agent's
+# answer report, it has no worktree and no local agent process, so no ship
+# delivery path and no secondmate home can run on it. The channel's opt-in gate
+# and the captain's data boundary are enforced in the dispatch branch below and
+# owned by docs/nio-chat-agent-backend.md.
+if [ "$HARNESS" = nio-chat-agent ] && [ "$KIND" != scout ]; then
+  echo "error: nio-chat-agent is a scout-only runtime (its deliverable is the agent's answer report, not a project change); spawn it with --kind scout" >&2
   exit 1
 fi
 
@@ -2540,9 +2596,18 @@ if [ "$KIND" = secondmate ]; then
     BRIEF="$DATA/$ID/brief.md"
   fi
 else
-  PROJ_ABS="$(cd "$(resolve_project_dir_arg "$PROJ")" && pwd)"
-  WT=""
-  BRIEF="$DATA/$ID/brief.md"
+  if [ "$HARNESS" = nio-chat-agent ]; then
+    # A nio-chat scout has no project and no local copy: its whole deliverable
+    # is the agent's answer, captured by the runtime library, and the brief
+    # travels as the run's user message (the agent cannot read files).
+    PROJ_ABS=""
+    WT=""
+    BRIEF="$DATA/$ID/brief.md"
+  else
+    PROJ_ABS="$(cd "$(resolve_project_dir_arg "$PROJ")" && pwd)"
+    WT=""
+    BRIEF="$DATA/$ID/brief.md"
+  fi
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   SPAWN_TREEHOUSE_PROJECT_LOCK=$(fm_treehouse_project_lock_path "$PROJ_ABS") || {
@@ -2560,17 +2625,23 @@ fi
   exit 1
 }
 if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
-  if fm_brief_task_placeholders_present "$BRIEF"; then
-    echo "error: $BRIEF still contains {TASK} or {FIRSTMATE_SPEC}; fill ## Captain's intent and ## Firstmate spec before spawn" >&2
-    exit 1
-  fi
-  if ! fm_brief_task_content_valid "$BRIEF"; then
-    echo "error: $BRIEF must contain nonempty ## Captain's intent and ## Firstmate spec subsections (or a nonempty legacy # Task body) before spawn" >&2
-    exit 1
-  fi
-  if ADDRESS_LINE=$(fm_brief_intent_address_line "$BRIEF"); then
-    echo "error: $BRIEF ## Captain's intent has an operator-address line: $ADDRESS_LINE; write the captain's actual words without a Captain label or address before spawn, since the heading already records provenance" >&2
-    exit 1
+  # The authoring checks below validate how the brief was written. A relaunch
+  # reuses the brief the task already ran with - its shape cannot have changed
+  # since the spawn that first admitted it - so re-litigating it here would
+  # only strand a legacy-brief crew that recovery can no longer relaunch.
+  if [ "$RELAUNCH" -eq 0 ]; then
+    if fm_brief_task_placeholders_present "$BRIEF"; then
+      echo "error: $BRIEF still contains {TASK} or {FIRSTMATE_SPEC}; fill ## Captain's intent and ## Firstmate spec before spawn" >&2
+      exit 1
+    fi
+    if ! fm_brief_task_content_valid "$BRIEF"; then
+      echo "error: $BRIEF must contain nonempty ## Captain's intent and ## Firstmate spec subsections (or a nonempty legacy # Task body) before spawn" >&2
+      exit 1
+    fi
+    if ADDRESS_LINE=$(fm_brief_intent_address_line "$BRIEF"); then
+      echo "error: $BRIEF ## Captain's intent has an operator-address line: $ADDRESS_LINE; write the captain's actual words without a Captain label or address before spawn, since the heading already records provenance" >&2
+      exit 1
+    fi
   fi
   if [ "$KIND" = ship ] && [ "$MODE" = no-mistakes ]; then
     if fm_brief_task_heading_present "$BRIEF" "## Captain's intent"; then
@@ -2578,7 +2649,7 @@ if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
     else
       LEGACY_TASK_BODY=$(fm_brief_heading_body "$BRIEF" "# Task")
       CAPTAIN_INTENT=$(fm_brief_marked_captain_words "$LEGACY_TASK_BODY")
-      if [ -z "$(printf '%s' "$CAPTAIN_INTENT" | tr -d '[:space:]')" ]; then
+      if [ "$RELAUNCH" -eq 0 ] && [ -z "$(printf '%s' "$CAPTAIN_INTENT" | tr -d '[:space:]')" ]; then
         echo "error: legacy mixed # Task brief has no provenance-marked captain words for no-mistakes --intent; add [captain] lines or migrate to ## Captain's intent and ## Firstmate spec" >&2
         exit 1
       fi
@@ -2973,6 +3044,96 @@ fi
 if [ -e "$STATE/$ID.backlog-close" ] || [ -L "$STATE/$ID.backlog-close" ]; then
   echo "error: task $ID has a pending authoritative backlog close at $STATE/$ID.backlog-close; finish or repair that close before dispatching a new worker" >&2
   exit 1
+fi
+
+preserve_relaunch_meta() {
+  awk -F= '
+    BEGIN {
+      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend external_ref herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      for (i in keys) owned[keys[i]] = 1
+    }
+    !($1 in owned)
+  ' "$RELAUNCH_META"
+}
+
+# --- nio-chat-agent dispatch --------------------------------------------------
+# The nio-chat runtime has no pane, worktree, or launch command: dispatch IS
+# sending the brief as the run's user message. This branch performs the whole
+# endpoint-side dispatch through the runtime library, then leaves through the
+# same record-publication and backlog-commit ordering a pane launch uses,
+# minus the pane (docs/nio-chat-agent-backend.md).
+if [ "$HARNESS" = nio-chat-agent ]; then
+  [ -z "$LAUNCH" ] || { echo "error: nio-chat-agent takes no launch command" >&2; exit 1; }
+  # shellcheck source=bin/fm-niochat-lib.sh
+  . "$SCRIPT_DIR/fm-niochat-lib.sh"
+  # The library owns the opt-in gate, readiness, the single-concurrency
+  # channel, thread create/adopt, the run record, and the generated check.
+  NIO_OUT=$(fm_niochat_dispatch "$STATE" "$ID" "$BRIEF" "$RELAUNCH_NIO_THREAD") || exit 1
+  NIO_THREAD=${NIO_OUT#dispatched thread=}
+  NIO_THREAD=${NIO_THREAD%% *}
+  NIO_RUN=${NIO_OUT##* run=}
+  { [ -n "$NIO_THREAD" ] && [ -n "$NIO_RUN" ]; } || {
+    echo "error: nio-chat dispatch returned an unreadable result: $NIO_OUT" >&2
+    exit 1
+  }
+  TASK_TMP="/tmp/fm-$ID"
+  SPAWN_GEN="s$(date +%s).${BASHPID:-$$}.$RANDOM"
+  SPAWN_META_TMP="$STATE/.$ID.meta.spawn.${BASHPID:-$$}"
+  {
+    echo "window=fm-$ID"
+    echo "endpoint_task_id=$ID"
+    # No worktree or project exists for a nio-chat task, and the nio endpoint
+    # contract forbids the keys entirely rather than reading empties
+    # (bin/fm-backend.sh fm_backend_validate_niochat_endpoint).
+    echo "harness=$HARNESS"
+    echo "kind=$KIND"
+    [ -z "$MODE" ] || echo "mode=$MODE"
+    [ -z "$YOLO" ] || echo "yolo=$YOLO"
+    echo "tasktmp=$TASK_TMP"
+    echo "model=${MODEL:-default}"
+    echo "effort=${EFFORT:-default}"
+    echo "spawn_gen=$SPAWN_GEN"
+    echo "backend=nio-chat"
+    echo "external_ref=$NIO_THREAD"
+    if [ "$RELAUNCH" -eq 1 ]; then
+      preserve_relaunch_meta
+    fi
+  } > "$SPAWN_META_TMP" || {
+    fm_niochat_teardown "$STATE" "$ID" >/dev/null 2>&1 || true
+    echo "error: task record for $ID could not be prepared at $SPAWN_META_TMP; the nio-chat run was cancelled and the channel cleared" >&2
+    exit 1
+  }
+  if ! fm_backlog_atomic_transition publish "$SPAWN_META_TMP" "$STATE/$ID.meta" "task record" "$STATE"; then
+    # Unwind the just-started run so no orphan holds the channel: the library
+    # teardown cancels it, deletes a thread this dispatch created, and clears
+    # every local artifact it wrote.
+    fm_niochat_teardown "$STATE" "$ID" >/dev/null 2>&1 || true
+    echo "error: task record for $ID could not be published ($FM_BACKLOG_TRANSITION_ERROR); the nio-chat run was cancelled and the channel cleared" >&2
+    exit 1
+  fi
+  SPAWN_META_TMP=
+  "$SCRIPT_DIR/fm-check-register.sh" "$ID"
+  if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
+    SPAWN_TASK_SET_LOCK_HELD=0
+    fm_lock_release "$SPAWN_TASK_SET_LOCK"
+  fi
+  "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+  # The backlog In-flight transition stays the final fallible commit, exactly
+  # as for a pane launch (bin/fm-backlog-transition-lib.sh owns the invariant).
+  if [ "$BACKLOG_TRANSITION" = 1 ]; then
+    if ! fm_backlog_atomic_transition dispatch "$STATE/$ID.meta" "$DATA" "$ID" "$STATE"; then
+      echo "error: task $ID's backlog item could not be moved to In flight ($FM_BACKLOG_TRANSITION_ERROR); the record stays published at $STATE/$ID.meta - cancel the run and clean it up with bin/fm-niochat.sh teardown $ID before retrying" >&2
+      fm_lock_release "$SPAWN_META_LOCK"
+      SPAWN_META_LOCK_HELD=0
+      exit 1
+    fi
+  fi
+  fm_lock_release "$SPAWN_META_LOCK"
+  SPAWN_META_LOCK_HELD=0
+  SPAWN_DELIVERY=
+  [ -z "$MODE" ] || SPAWN_DELIVERY=" mode=$MODE yolo=$YOLO"
+  echo "spawned $ID harness=$HARNESS kind=$KIND$SPAWN_DELIVERY window=fm-$ID worktree= thread=$NIO_THREAD run=$NIO_RUN"
+  exit 0
 fi
 
 W="fm-$ID"
@@ -3820,9 +3981,10 @@ if [ "$KIND" != secondmate ]; then
     # a turn; Stop (normal completion), StopFailure (API-error turn end),
     # and SessionEnd (process shutdown) all close it, so an abnormal end can
     # never leave a stale busy record. Claude fires no hook for a manual
-    # interrupt: fm-control preserves the adapter-owned state, while the
-    # legacy fm-send --key Escape path records idle/fm-interrupt. Stop keeps
-    # the turn-ended NOTIFICATION touch for the watcher. Every
+    # interrupt: fm-control preserves the adapter-owned state and lands the
+    # turn-ended NOTIFICATION touch itself, while the legacy fm-send --key
+    # Escape path records idle/fm-interrupt. Stop keeps the turn-ended
+    # NOTIFICATION touch for the watcher. Every
     # hook command tolerates a refused event (|| true) so a stale-gen writer
     # can never break Claude's own lifecycle.
     mkdir -p "$WT/.claude"
@@ -3832,7 +3994,7 @@ if [ "$KIND" != secondmate ]; then
     j_stop=$(json_escape "touch $(shell_quote "$TURNEND"); $busy_cmd_prefix idle $busy_suffix --event stop 2>/dev/null || true")
     j_stopfail=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event stop-failure 2>/dev/null || true")
     j_sessionend=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event session-end 2>/dev/null || true")
-    cat >"$WT/.claude/settings.local.json" <<EOF
+    cat > "$WT/.claude/settings.local.json" <<EOF
 {"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}]}}
 EOF
     exclude_path '.claude/settings.local.json'
@@ -4193,15 +4355,6 @@ else
   SPAWN_FRESH_COMMIT_PENDING=1
 fi
 SPAWN_META_PATH=$SPAWN_META_TMP
-preserve_relaunch_meta() {
-  awk -F= '
-    BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
-      for (i in keys) owned[keys[i]] = 1
-    }
-    !($1 in owned)
-  ' "$RELAUNCH_META"
-}
 {
   echo "window=$META_WINDOW"
   echo "endpoint_task_id=$ID"

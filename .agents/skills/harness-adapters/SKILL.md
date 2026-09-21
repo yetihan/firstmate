@@ -3,7 +3,7 @@ name: harness-adapters
 description: >-
   Agent-only reference for firstmate harness operations.
   Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
-  Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, kimi, cursor, gemini, muse, rovo, omp, and agy.
+  Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, kimi, cursor, gemini, muse, rovo, omp, agy, and nio-chat-agent.
 user-invocable: false
 metadata:
   internal: true
@@ -36,6 +36,7 @@ Deliver lifecycle actions only through `../../../bin/fm-control.sh <task-id> int
 Never type an interrupt key or exit command through `fm-send`, where routing-marked lifecycle text becomes chat.
 Trust handling is complete only when inspection proves the target started processing its instructions; delivery success alone is not proof.
 Muse, Gemini, and AGY are verified only for crewmate and scout work, never a secondmate or primary.
+nio-chat-agent is verified for scouts only, never a crewmate, secondmate, or primary, and only behind its default-off channel opt-in; `../../../docs/nio-chat-agent-backend.md` owns its verified reference outside this skill tree.
 
 ## Detection
 
@@ -95,7 +96,8 @@ A new tool remains undispatchable until the `verify` plan, its harness entry, ev
     "muse": "references/harness/muse.md",
     "rovo": "references/harness/rovo.md",
     "omp": "references/harness/omp.md",
-    "agy": "references/harness/agy.md"
+    "agy": "references/harness/agy.md",
+    "nio-chat-agent": "../../../docs/nio-chat-agent-backend.md"
   }
 }
 ```

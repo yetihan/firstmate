@@ -238,6 +238,41 @@ pi-signed
 0.82.0
 ```
 
+### 2026-09-02 drift-guard rerun
+
+The guard itself needed a correction before this rerun could be trusted.
+On a machine whose PATH `codex` was shadowed by a dead wrapper shim, the probe exited instantly, tmux destroyed its window, and tmux's active-window fallback then supplied the control pane's idle `zsh` as the "observed identity", so the guard reported identity drift that never existed.
+The guard now requires its resolved candidate to execute `--version`, tries every PATH match plus documented install roots (kimi's home install, cursor's verified resolver, and the macOS ChatGPT-app bundle that ships the codex CLI), keeps dead probe panes for their exit status, and gates every evidence read on exact window membership, so a probe that never ran fails as a probe launch failure instead of teaching the classifier a phantom identity.
+The same rerun exposed the retained-title hazard in the classifier itself: a pane kept by `remain-on-exit` after its process exited still reported the dead harness's name through `#{pane_current_command}` and would have classified `alive` forever, so pane death now retires the title source and the verdict is `dead` (portable regression case included).
+
+```sh
+FM_HARNESS_LIVENESS_DRIFT=1 bin/fm-test-run.sh tests/fm-harness-liveness-drift-live-e2e.test.sh
+```
+
+Bounded output:
+
+```text
+# claude 2.1.236 (Claude Code) (/opt/homebrew/bin/claude): title='claude' foreground=[/opt/homebrew/bin/claude ]
+ok - harness liveness: claude 2.1.236 (Claude Code) classifies alive
+# codex codex-cli 0.152.0 (/Applications/ChatGPT.app/Contents/Resources/codex): title='codex' foreground=[/Applications/ChatGPT.app/Contents/Resources/codex ]
+ok - harness liveness: codex codex-cli 0.152.0 classifies alive
+# pi 0.84.4 (/opt/homebrew/bin/pi): title='node' foreground=[pi ]
+ok - harness liveness: pi 0.84.4 classifies alive
+# checked 3 installed harness(es)
+```
+
+Observed identities from this rerun, and the resulting verdict:
+
+| Harness | Version | `#{pane_current_command}` | Foreground `comm` | Verdict |
+| --- | --- | --- | --- | --- |
+| claude | 2.1.236 | `claude` | `/opt/homebrew/bin/claude` | alive |
+| codex | codex-cli 0.152.0 | `codex` | `/Applications/ChatGPT.app/Contents/Resources/codex` | alive |
+| pi | 0.84.4 | `node` | `pi` | alive |
+
+Claude Code's title attributes it again at 2.1.236, while Pi's title is now a bare `node` that only the foreground source attributes, so title drift moves in both directions between releases and the two-source verdict stays load-bearing.
+Codex 0.152.0 is installed on this machine only inside the macOS ChatGPT-app bundle, with the PATH name `codex` shadowed by a dead cmux-cli temp shim that exits 127, so the guard passed the shim over, verified the bundle binary, and noted the PATH shadow for spawn health.
+Grok is no longer installed here - only a non-executing wrapper remains on PATH, which the guard reports as an unlaunchable candidate rather than an installed harness - so the 2026-08-03 rows for grok, opencode, pi-signed, and kimi above, plus cursor's and muse's own dated verifications, remain the latest records for those adapters.
+
 ### Harness-adapter instruction routing
 
 Two checks keep the evidence boundaries separate.

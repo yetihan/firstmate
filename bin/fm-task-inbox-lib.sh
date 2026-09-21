@@ -284,6 +284,22 @@ fm_task_inbox_doorbell_line() {  # <record-path>
 # positively identify (that classifier is advisory here by design).
 fm_task_inbox_ring() {  # <backend> <target> <record-path> [expected-label]
   local backend=$1 target=$2 rec=$3 label=${4:-} line cstate verdict
+  if [ "$backend" = nio-chat ]; then
+    # A nio-chat worker has no terminal to ring: delivering the record IS the
+    # ring. The runtime library steers the record's body (a mid-run task gets
+    # it durably queued instead) and moves the record to handled/, which is
+    # exactly the acknowledgement this ladder reads. Any refusal keeps the
+    # record in place, so return 2 lets the watcher re-ring later.
+    local inbox_dir nio_state nio_id
+    # shellcheck source=bin/fm-niochat-lib.sh
+    . "$_FM_TASK_INBOX_LIB_DIR/fm-niochat-lib.sh"
+    inbox_dir=$(dirname -- "$rec")
+    nio_state=$(dirname -- "$inbox_dir")
+    nio_id=${inbox_dir##*/}
+    nio_id=${nio_id%.inbox}
+    fm_niochat_deliver_record "$nio_state" "$nio_id" "$rec" 2>/dev/null && return 0
+    return 2
+  fi
   case "$(fm_backend_agent_state "$backend" "$target" 2>/dev/null || true)" in
     dead|missing) return 3 ;;
   esac

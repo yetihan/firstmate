@@ -1,0 +1,13 @@
+{
+  "overrides": {
+    "my-scatter-investigation": {
+      "group": "电池调研",
+      "note": "队长点名归组"
+    }
+  },
+  "theme_keywords": [
+    { "keyword": "battery", "group": "电池" },
+    { "keyword": "niochat", "group": "NIO Chat" },
+    { "keyword": "peak", "group": "Peak 削峰填谷" }
+  ]
+}

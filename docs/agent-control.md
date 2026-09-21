@@ -6,6 +6,8 @@ The **data plane** is [`bin/fm-send.sh`](../bin/fm-send.sh): conversational text
 For a `kind=secondmate` target it always prepends the from-firstmate routing marker, because a secondmate is itself a firstmate and its reply must come back through the status path rather than a chat nobody reads.
 
 The **control plane** is [`bin/fm-control.sh`](../bin/fm-control.sh): allowlisted lifecycle verbs addressed to an exact task id.
+A `harness=nio-chat-agent` task has no terminal to key, so its three verbs run as nio-chat runtime-library calls instead of the pane mechanics, postconditions, and relaunch transaction below: interrupt cancels the task's own run, exit settles the channel while keeping the thread, and relaunch re-dispatches on the recorded thread.
+[`nio-chat-agent-backend.md`](nio-chat-agent-backend.md) owns that runtime's lifecycle contracts.
 
 The split exists because the data plane's marking is exactly right for a message and exactly wrong for a lifecycle command.
 A routing-marked `/quit` arrives as ordinary chat - `[fm-from-firstmate] /quit` - which the agent reasons about instead of executing.
@@ -36,6 +38,7 @@ A recorded `harness=` is not always an exact adapter name: a task launched from 
 
 An exit that delivers lifecycle input but cannot prove the agent stopped fails with `exit=unconfirmed`, reports the observed agent state and any interrupt cancellation claim, and never claims that nothing changed.
 Interrupt never rewrites busy state as proof of its own success.
+A verified interrupt does land the turn-ended notification marker, because some harnesses fire no turn-end hook of their own on the interrupt path (Claude's Stop hook never runs after a manual interrupt) and the watcher ages a busy pane's turn bound from that marker.
 Claude exposes no lifecycle acknowledgement for a manual interrupt, so delivery succeeds with `cancel=unconfirmed` and its adapter-owned busy state remains as observed.
 muse's session log records `terminal=cancelled` for the interrupted run, so the control plane reports `cancel=confirmed` only after observing that exact acknowledgement.
 

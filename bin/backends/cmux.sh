@@ -348,10 +348,14 @@ fm_backend_cmux_surface_id_for_workspace() {  # <workspace_id>
 # so no separate new-surface call is needed). --focus false is passed for
 # defense in depth though verified to already be the default (finding:
 # workspace/surface/pane create all default focus to false) - no
-# focus-restore dance is needed, unlike zellij. Echoes "<workspace_id>
+# focus-restore dance is needed, unlike zellij. Both post-create id lookups
+# retry briefly: new-workspace prints only a list index (never the uuid), and
+# workspace list is eventually consistent right after creation (verified race,
+# cmux 0.64.23: an immediate label re-list can miss the fresh workspace), so a
+# single racing lookup fails the whole spawn. Echoes "<workspace_id>
 # <surface_id>" on success.
 fm_backend_cmux_create_task() {  # <label> <cwd>
-  local label=$1 cwd=$2 title dup out wsid sfid
+  local label=$1 cwd=$2 title dup out wsid sfid attempt
   title=$(fm_backend_cmux_scoped_title "$label")
   dup=$(fm_backend_cmux_workspace_id_for_label "$title")
   if [ -n "$dup" ]; then
@@ -362,9 +366,19 @@ fm_backend_cmux_create_task() {  # <label> <cwd>
     echo "error: cmux new-workspace failed for '$title': $out" >&2
     return 1
   }
-  wsid=$(fm_backend_cmux_workspace_id_for_label "$title")
+  wsid=""
+  for attempt in 1 2 3 4 5; do
+    wsid=$(fm_backend_cmux_workspace_id_for_label "$title")
+    [ -n "$wsid" ] && break
+    sleep 0.3
+  done
   [ -n "$wsid" ] || { echo "error: could not resolve a cmux workspace id for '$title' after creation" >&2; return 1; }
-  sfid=$(fm_backend_cmux_surface_id_for_workspace "$wsid")
+  sfid=""
+  for attempt in 1 2 3 4 5; do
+    sfid=$(fm_backend_cmux_surface_id_for_workspace "$wsid")
+    [ -n "$sfid" ] && break
+    sleep 0.3
+  done
   [ -n "$sfid" ] || { echo "error: could not resolve the default surface for cmux workspace '$title' ($wsid)" >&2; return 1; }
   printf '%s %s' "$wsid" "$sfid"
 }

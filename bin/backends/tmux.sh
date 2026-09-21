@@ -318,7 +318,11 @@ fm_backend_tmux_foreground_argv0s() {  # <target>
 # a false `dead` is the one outcome that can launch a duplicate agent onto a
 # live worktree, while the foreground process group - when it is readable - is
 # authoritative for the negative verdicts, since it is the only source that can
-# distinguish a truly idle pane from a rewritten process title.
+# distinguish a truly idle pane from a rewritten process title. A pane kept
+# present by remain-on-exit after its process exited still reports that
+# process's retained title, so pane death retires the title source entirely:
+# no live foreground group named a harness, and the endpoint is confidently
+# `dead` rather than an immortal title ghost.
 fm_backend_tmux_agent_state() {  # <target>
   local target=$1 comm session window windows inventory_status
   local foreground argv0s name pid fg_seen=0 fg_shell=0 fg_other=0
@@ -392,6 +396,20 @@ EOF
   done <<EOF
 $(fm_backend_tmux_foreground_args "$target")
 EOF
+
+  # A pane kept present by remain-on-exit after its process exited still
+  # reports that process's retained name through #{pane_current_command}, so
+  # the title source below would attribute the dead pane to its dead harness
+  # and call it alive forever. The pane's own death flag retires the title
+  # source: the endpoint exists, its process is gone, and no live foreground
+  # group above named a harness, so the verdict is confidently `dead` and
+  # licenses recovery. A pane whose leader exited while a harness child still
+  # holds the pty is still classified `alive` above from that live child, so
+  # this can never manufacture a false `dead`.
+  if [ "$(tmux display-message -p -t "$target" '#{pane_dead}' 2>/dev/null)" = 1 ]; then
+    printf 'dead'
+    return 0
+  fi
 
   comm=$(fm_backend_tmux_current_command "$target") || {
     printf 'unreadable'
