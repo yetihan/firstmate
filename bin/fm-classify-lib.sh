@@ -616,7 +616,10 @@ status_open_decisions() {  # <status-file> [<kind>]
 # Actual run/pane evidence is still reconciled by fm-crew-state.sh.
 status_current_line() {  # <status-file> <kind>
   local open key verb note current='' resolve held scan i line dkey
-  local -a events=()
+  # walked_events, not events: the name events is a string local in
+  # status_span_first_actionable_record below, and sharing it across the two
+  # scopes trips ShellCheck's file-scoped SC2178/SC2128 array dataflow.
+  local -a walked_events=()
   open=$(status_open_decisions "$1" "$2")
   while IFS=$'\t' read -r key verb note; do
     case "$verb" in ?*) current="$verb [key=$key]: $note" ;; esac
@@ -633,15 +636,15 @@ EOF
     held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
     if [ -f "$1" ] && [ -r "$1" ]; then
       while IFS= read -r line; do
-        [ -n "$line" ] && events+=("$line")
+        [ -n "$line" ] && walked_events+=("$line")
       done <<EOF
 $(_fm_status_event_scan < "$1" 2>/dev/null || true)
 EOF
     fi
-    i=${#events[@]}
+    i=${#walked_events[@]}
     while [ "$i" -gt 0 ]; do
       i=$((i - 1))
-      line=${events[$i]}
+      line=${walked_events[$i]}
       verb=$(status_line_verb "$line")
       case "$verb" in
         "$resolve"|"$held") continue ;;
