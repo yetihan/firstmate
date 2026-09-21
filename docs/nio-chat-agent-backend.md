@@ -77,7 +77,9 @@ An unreachable server at finish time bumps the deadline by a bounded retry windo
 
 Steering: `fm-send.sh` writes the ordinary durable inbox record; for a nio target the ring IS the delivery - `fm-task-inbox-lib.sh`'s nio branch hands the record to the runtime library, which steers its text as a new run on the same thread (queued durably when the channel is mid-run) and moves the record to `handled/`, the same acknowledgement every harness uses.
 
-Interrupt/exit: `fm-control.sh <id> interrupt` cancels this task's own active run (never another task's); `exit` settles the channel and keeps the thread; `relaunch` re-dispatches on the recorded thread through the spawn plane.
+Interrupt/exit: `fm-control.sh <id> interrupt` cancels this task's own active run (never another task's); `exit` settles the channel and keeps the thread; `relaunch` requires `--note` (or `--note-file`) and re-dispatches on the recorded thread through the spawn plane.
+The note is appended to the task's instructions before dispatch, with the prior instructions and the note journalled beside `state/<id>.control-relaunch`; a refusal before dispatch restores the instructions byte-exact, while a failure after dispatch keeps the appended note the dispatched run is already working from.
+Relaunch refuses `--model` and `--effort` because the desktop agent owns both selections, and a `--harness` other than `nio-chat-agent` because the recorded thread re-dispatches only through this runtime - never silently dropping an axis.
 
 Teardown: the ordinary scout gates hold - the report and the captain-call inventory are required before any cleanup.
 Cleanup cancels any active run, deletes the thread only when firstmate created it (an adopted thread is the captain's conversation and is never destroyed), and removes the run record, stream capture, steer queue, wake marker, and channel lock.

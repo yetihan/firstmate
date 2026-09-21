@@ -6,7 +6,7 @@ The **data plane** is [`bin/fm-send.sh`](../bin/fm-send.sh): conversational text
 For a `kind=secondmate` target it always prepends the from-firstmate routing marker, because a secondmate is itself a firstmate and its reply must come back through the status path rather than a chat nobody reads.
 
 The **control plane** is [`bin/fm-control.sh`](../bin/fm-control.sh): allowlisted lifecycle verbs addressed to an exact task id.
-A `harness=nio-chat-agent` task has no terminal to key, so its three verbs run as nio-chat runtime-library calls instead of the pane mechanics, postconditions, and relaunch transaction below: interrupt cancels the task's own run, exit settles the channel while keeping the thread, and relaunch re-dispatches on the recorded thread.
+A `harness=nio-chat-agent` task has no terminal to key, so its three verbs run as nio-chat runtime-library calls instead of the pane mechanics, postconditions, and relaunch transaction below: interrupt cancels the task's own run, exit settles the channel while keeping the thread, and relaunch requires the progress note and re-dispatches on the recorded thread.
 [`nio-chat-agent-backend.md`](nio-chat-agent-backend.md) owns that runtime's lifecycle contracts.
 
 The split exists because the data plane's marking is exactly right for a message and exactly wrong for a lifecycle command.
