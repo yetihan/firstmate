@@ -3,7 +3,7 @@ name: harness-adapters
 description: >-
   Agent-only reference for firstmate harness operations.
   Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
-  Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, kimi, cursor, gemini, muse, and nio-chat-agent.
+  Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, kimi, cursor, gemini, muse, rovo, omp, agy, and nio-chat-agent.
 user-invocable: false
 metadata:
   internal: true
@@ -35,13 +35,15 @@ For recovery and control, use the exact `harness=` in `state/<id>.meta`; never i
 Deliver lifecycle actions only through `../../../bin/fm-control.sh <task-id> interrupt|exit|relaunch`.
 Never type an interrupt key or exit command through `fm-send`, where routing-marked lifecycle text becomes chat.
 Trust handling is complete only when inspection proves the target started processing its instructions; delivery success alone is not proof.
-Muse and Gemini are verified only for crewmate and scout work, never a secondmate or primary.
+Muse, Gemini, and AGY are verified only for crewmate and scout work, never a secondmate or primary.
 nio-chat-agent is verified for scouts only, never a crewmate, secondmate, or primary, and only behind its default-off channel opt-in; `../../../docs/nio-chat-agent-backend.md` owns its verified reference outside this skill tree.
 
 ## Detection
 
-`../../../bin/fm-harness.sh` prints firstmate's own harness from verified environment markers, then process ancestry.
+`../../../bin/fm-harness.sh` prints firstmate's own harness from verified environment markers and process ancestry, and owns how they combine.
+A marker names its harness, but a structural ancestor of a different harness outranks it, because a marker is ordinary environment state a child or a multiplexer can retain while ancestry is what proves who owns the process tree.
 Only `FM_PI_HARNESS=pi-signed` at the launch boundary together with `PI_CODING_AGENT=true` selects Pi-signed; shared unmarked launcher ancestry remains Pi.
+omp publishes no marker of its own; `FM_OMP_HARNESS=omp` is Firstmate's launch marker and the anchored process name `omp` is its ancestry evidence, as `references/harness/omp.md` records.
 `../../../bin/fm-spawn.sh` owns worker marker establishment, while the README launch command owns the signed-primary boundary.
 `../../../bin/fm-harness.sh crew` resolves `config/crew-harness`, where absent or `default` means firstmate's own harness.
 `../../../bin/fm-harness.sh secondmate` resolves `config/secondmate-harness` -> `config/crew-harness` -> firstmate's own harness.
@@ -92,6 +94,9 @@ A new tool remains undispatchable until the `verify` plan, its harness entry, ev
     "cursor": "references/harness/cursor.md",
     "gemini": "references/harness/gemini.md",
     "muse": "references/harness/muse.md",
+    "rovo": "references/harness/rovo.md",
+    "omp": "references/harness/omp.md",
+    "agy": "references/harness/agy.md",
     "nio-chat-agent": "../../../docs/nio-chat-agent-backend.md"
   }
 }

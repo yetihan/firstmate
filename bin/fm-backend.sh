@@ -451,6 +451,25 @@ fm_backend_validate_niochat_endpoint() {  # <meta-file> <task-id>
   return 0
 }
 
+# An Orca worktree id is the composite `<orca id>::<absolute worktree path>`
+# that Orca itself returns, so the `:` and `/` characters every real value
+# carries make the simple-atom check reject it. Firstmate hands the id back to
+# Orca opaquely and resolves it through Orca before removing anything, so this
+# proves only the shape that can name one worktree: both halves of the first
+# `::` split present, and the path half absolute.
+fm_backend_orca_worktree_id_valid() {  # <value>
+  case "$1" in
+    *$'\n'*|*$'\r'*|*$'\t'*) return 1 ;;
+    *::*) ;;
+    *) return 1 ;;
+  esac
+  [ -n "${1%%::*}" ] || return 1
+  case "${1#*::}" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+}
+
 fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
   local meta=$1 id=$2 backend_count backend window worktree project binding_count binding
   local session pane recorded_session workspace tab terminal worktree_id surface
@@ -577,7 +596,7 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
       }
       if [ "$window" != "fm-$id" ] \
         || ! fm_backend_endpoint_atom_valid "$terminal" \
-        || ! fm_backend_endpoint_atom_valid "$worktree_id"; then
+        || ! fm_backend_orca_worktree_id_valid "$worktree_id"; then
         echo "REFUSED: Orca endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
         return 1
       fi
@@ -788,6 +807,36 @@ fm_backend_capture() {  # <backend> <target> <lines> [expected-label]
   esac
 }
 
+# FM_BACKEND_VISIBLE_CAPTURE: backends with a verified viewport-only read, each
+# implementing fm_backend_<name>_visible_capture. This one list answers both the
+# capability question and the dispatch, so they cannot disagree. cmux is absent
+# pending live verification: its `read-screen` without `--scrollback` plausibly
+# reads only the viewport, but that has not been observed on a real cmux, and
+# the adapter's own capture opts into history with `--scrollback`. orca's
+# `terminal read --limit` is a history read with no viewport mode.
+FM_BACKEND_VISIBLE_CAPTURE="tmux herdr zellij"
+
+# fm_backend_visible_capture_supported: whether <backend> can read the visible
+# viewport WITHOUT scrollback. Callers that must not mistake a scrolled-away
+# frame for the live screen ask this first and fail closed on a no.
+fm_backend_visible_capture_supported() {  # <backend>
+  fm_backend_list_contains "$FM_BACKEND_VISIBLE_CAPTURE" "$1"
+}
+
+# fm_backend_visible_capture: the visible viewport, never scrollback. A backend
+# outside FM_BACKEND_VISIBLE_CAPTURE declines here rather than answering with a
+# history-backed capture the caller would read as the live screen.
+fm_backend_visible_capture() {  # <backend> <target> [expected-label]
+  local backend=$1
+  shift
+  fm_backend_visible_capture_supported "$backend" || {
+    echo "error: backend '$backend' has no verified viewport-bounded capture primitive" >&2
+    return 1
+  }
+  fm_backend_source "$backend" || return 1
+  "fm_backend_${backend}_visible_capture" "$@"
+}
+
 # fm_backend_send_key: one backend-supported named special key.
 fm_backend_send_key() {  # <backend> <target> <key> [expected-label]
   local backend=$1
@@ -821,9 +870,18 @@ fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> <enter-sl
   esac
 }
 
-# fm_backend_kill: remove the task's session endpoint (best-effort; a
-# nonexistent/already-gone target is not an error - callers already swallow
-# failures here exactly as the inline `tmux kill-window ... || true` did).
+# fm_backend_kill: remove the task's session endpoint. An already-gone target
+# is NOT an error and returns 0 silently, so ordinary cleanup of an
+# already-exited session stays quiet. A nonzero return means the close could
+# not do its job and the endpoint may still be live: the caller owns that
+# refusal and must not delete the durable records that are the only thing
+# naming the endpoint (bin/fm-teardown.sh's retain-and-stop path).
+# How much each adapter can prove differs, and no arm ever guesses: tmux
+# resolves a failed close against the window's exact recorded identity, Orca
+# reports a close its missing CLI never attempted, and the remaining arms
+# still report 0 for a close command that failed after being accepted.
+# docs/verification/runtime-backends.md "Endpoint close" is the per-backend
+# record.
 fm_backend_kill() {  # <backend> <target>
   local backend=$1
   shift
@@ -968,12 +1026,17 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
 #   ambiguous  - the endpoint exists but its process cannot be attributed.
 #   unreadable - a target or inventory read failed or contradicted itself.
 #   unverified - this backend has no recovery classifier.
-# Only `dead` and `missing` license recovery. The tmux adapter requires a
-# successful session inventory and returns `missing` only when it omits the
-# exact window; the Herdr adapter reuses its husk
-# classifier. Zellij remains unverified because its secondmate ghost-tab and
-# agent-process recovery path has not been empirically validated. Orca and cmux
-# do not support secondmate spawns.
+# Only `dead` and `missing` license recovery. Every `alive` is proven at
+# process level through the shared classifier in bin/fm-agent-process-lib.sh,
+# never from a registration or a rendered title alone. The tmux adapter
+# requires a successful session inventory and returns `missing` only when it
+# omits the exact window; the Herdr adapter reuses its strict husk classifier -
+# which verifies a registered agent against `pane process-info` and the real
+# process table, so a registration Herdr kept over a shell-only pane reads
+# `dead` here (issue #4115) - then maps a positively stopped session server to
+# `missing` only in this recovery-grade view. Zellij remains unverified because
+# its secondmate ghost-tab and agent-process recovery path has not been
+# empirically validated. Orca and cmux do not support secondmate spawns.
 fm_backend_agent_state() {  # <backend> <target>
   local backend=$1 target=$2
   fm_backend_source "$backend" || { printf 'unverified'; return 0; }
