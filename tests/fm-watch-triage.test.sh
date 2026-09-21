@@ -3541,13 +3541,19 @@ test_open_captain_call_bounds_stale_churn() {
 
 # The other half of the same bound, and the one that decides whether widening the
 # wait was safe: the identical fixtures with NO hold must keep alarming on every
-# new hash, on both branches.
+# new hash, on both branches - with one exception. A FINISHED delivery line
+# (done:/failed:) reads as a finished leftover pane, which the finished cadence
+# owns (test_unheld_finished_stale_rides_the_finished_cadence below): the
+# delivery itself already reached firstmate through the status signal the moment
+# the line was appended, so its idle pane is a leftover, not a standing report.
+# A blocker or a plain working line carries no such standing report, so both
+# keep alarming per hash - a bound that swallowed an unheld blocker would be
+# worse than the churn it removes.
 test_stale_churn_without_a_captain_call_still_alarms() {
   local spec name line dir state out capture round wakes
   command -v tasks-axi >/dev/null 2>&1 \
     || { echo "skip: tasks-axi not found (unheld stale alarm)"; return 0; }
   for spec in \
-    'unheld-delivery|done: PR https://example.invalid/pull/1 checks green' \
     'unheld-blocker|blocked: cannot reach the release host' \
     'unheld-worker-line|working: still tidying the branch'
   do
@@ -3567,6 +3573,45 @@ test_stale_churn_without_a_captain_call_still_alarms() {
     done
   done
   pass "a stale window with no open captain call keeps alarming on every new hash"
+}
+
+
+# The unheld FINISHED half of that matrix. With no hold the backlog cannot bound
+# the pane, so the finished cadence does: first sight absorbs silently (the
+# delivery surfaced through the status signal when the line was appended), churn
+# inside the re-surface window stays silent - the 2026-09 per-hash alarm loop
+# this cadence exists to kill - and once the declaration ages past the window the
+# next distinct pane hash re-surfaces exactly once, finished-labeled, so a
+# forgotten delivery's leftover pane cannot rot unseen either.
+test_unheld_finished_stale_rides_the_finished_cadence() {
+  local dir state out capture wakes statusf
+  command -v tasks-axi >/dev/null 2>&1 \
+    || { echo "skip: tasks-axi not found (unheld finished stale)"; return 0; }
+  dir=$(make_hold_home unheld-delivery \
+    'done: PR https://example.invalid/pull/1 checks green' nohold) \
+    || fail "[unheld-delivery] could not build an unheld backlog fixture"
+  state="$dir/state"; out="$dir/watch.out"; capture="$dir/pane.txt"
+  statusf="$state/held-merge.status"
+
+  hold_watch_churn "$dir" "$out" "$capture" 'idle, tick' 2 \
+    || fail "[unheld-delivery] an unheld finished leftover stopped absorbing inside the re-surface window"
+  wakes=$(hold_stale_wakes "$state")
+  [ "$wakes" -eq 0 ] \
+    || fail "[unheld-delivery] an unheld finished leftover alarmed $wakes time(s) on first sight and churn"
+
+  # Age the declaration past the window, then re-seed the signal suppressor the
+  # way the watcher's own signal path would have: the re-surface under test is
+  # the stale pane's, not a fresh status append's.
+  set_mtime "$(( $(date +%s) - 5000 ))" "$statusf"
+  printf '%s' "$(seen_sig "$statusf")" > "$state/.seen-held-merge_status"
+  hold_watch_surface "$dir" "$out" "$capture" 'idle, elapsed 9s' \
+    || fail "[unheld-delivery] an aged unheld finished leftover never re-surfaced"
+  wakes=$(hold_stale_wakes "$state")
+  [ "$wakes" -eq 1 ] \
+    || fail "[unheld-delivery] the aged re-surface produced $wakes wakes instead of one"
+  grep -F "finished status, pane still open" "$out" >/dev/null \
+    || fail "[unheld-delivery] the aged re-surface did not carry the finished-status reason: $(cat "$out")"
+  pass "an unheld finished delivery absorbs on the finished cadence and re-surfaces once when aged"
 }
 
 
@@ -6119,6 +6164,7 @@ test_wedge_threshold_defers_to_a_declared_wait_under_a_working_verdict
 test_wedge_threshold_recheck_names_the_captain_for_a_held_lane
 test_open_captain_call_bounds_stale_churn
 test_stale_churn_without_a_captain_call_still_alarms
+test_unheld_finished_stale_rides_the_finished_cadence
 test_failed_wake_append_does_not_arm_the_captain_hold_throttle
 test_reheld_captain_call_starts_its_own_resurface_window
 test_secondmate_paused_resurfaces_in_normal_mode

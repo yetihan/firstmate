@@ -1365,6 +1365,12 @@ finished_absorb_ready() {  # <window-key> <task>
     return 1
   fi
   if crew_status_is_finished "$STATE/$task.status"; then
+    # A finish the captain is already holding is theirs to answer, not a
+    # leftover pane: an open backlog call keeps its own first-sight alarm and
+    # re-surface cadence, so the finished absorber must not swallow it.
+    if task_captain_call_open "$task"; then
+      return 1
+    fi
     return 0
   fi
   printf '%s' "checked:$sig" > "$STATE/.finished-$key"
@@ -2805,8 +2811,6 @@ EOF
               date +%s > "$ssf"
               clear_write_tracking "$key"
               triage_log "absorbed stale (provably working, overriding a stale captain-relevant status): $w"
-            elif crew_status_is_finished "$STATE/$task.status"; then
-              handle_finished_stale "$w" "$task" "$h"
             elif captain_call_stale_bound "$key" "$task"; then
               # The line is captain-relevant and stays so, but the backlog says
               # the captain already holds this work: further NEW pane hashes with
@@ -2819,6 +2823,12 @@ EOF
               rm -f "$ssf"
               clear_write_tracking "$key"
               triage_log "absorbed stale (open captain call already surfaced for this status): $w"
+            elif [ -z "$STALE_WAIT_DECLARATION" ] && crew_status_is_finished "$STATE/$task.status"; then
+              # No open captain call owns this finish (the bound above left the
+              # declaration empty), so the leftover pane takes the finished
+              # cadence. A held finish reaches the alarm arm below instead:
+              # the call's first sight is the one wake that must never absorb.
+              handle_finished_stale "$w" "$task" "$h"
             else
               fm_wake_append stale "$w" "stale: $w" || exit 1
               stale_wait_record "$key"
@@ -2880,9 +2890,12 @@ EOF
                 # pause_state_class already read the crew state and did not find
                 # work, so this costs no extra read; any other unclassified pane
                 # still surfaces immediately.
-                if crew_status_is_finished "$STATE/$task.status"; then
+                if crew_status_is_finished "$STATE/$task.status" && ! task_captain_call_open "$task"; then
                   handle_finished_stale "$w" "$task" "$h"
                 else
+                  # An open backlog captain call keeps its own first-sight alarm
+                  # and cadence inside surface_nonterminal_stale, so a held
+                  # finish is never absorbed as a silent leftover pane.
                   surface_nonterminal_stale "$w" "$h"
                 fi
                 ;;
