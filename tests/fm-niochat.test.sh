@@ -1022,6 +1022,52 @@ test_control_relaunch_spawn_refusal_restores_instructions() {
   pass "control: a spawn-plane refusal rolls the instructions back byte-exact"
 }
 
+# The spawn plane has a reachable failure AFTER dispatch: the backlog
+# In-flight commit is its final fallible step, and its refusal leaves the run
+# streaming on the recorded thread with the replacement record already
+# published. That run is working from the note-appended instructions, so
+# rolling the brief back would strip the note out from under a live worker
+# while claiming nothing was dispatched. The fixture pins a markdown backlog
+# and shadows tasks-axi with a script whose start verb refuses, so the
+# dispatch itself succeeds and only the commit fails.
+test_control_relaunch_postdispatch_failure_keeps_note() {
+  local out rc
+  unset TASKS_AXI_BACKEND || :
+  nio_control_case control-relaunch-postdispatch '{"task":"t1","thread":"th-1","thread_owner":"adopted","run_id":"run-1","status":"done","deadline":1,"started":1}'
+  cat > "$CASE/.tasks.toml" <<'EOF'
+backend = "markdown"
+
+[markdown]
+path = "data/backlog.md"
+EOF
+  printf '%s\n' '# Backlog' '' '## In flight' '' '## Queued' '' '## Done' > "$DATA/backlog.md"
+  cat > "$FB/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  --version) printf '0.2.5\n' ;;
+  update) printf '%s\n' '--archive-body' ;;
+  mv) printf '%s\n' 'usage: tasks-axi mv [<id>...]' ;;
+  show) printf 'task:\n  state: queued\n  held: no\n  blocked: no\n' ;;
+  start) echo 'error: the scripted backlog refuses to start this item' >&2; exit 1 ;;
+  *) exit 2 ;;
+esac
+SH
+  chmod +x "$FB/tasks-axi"
+  nio_capable 1
+  nio_sse_completed run-2 th-1 warmer | nio_resp POST "$STREAM_PATH" 1
+  rc=0
+  out=$(run_control t1 relaunch --note 'a live run holds this') || rc=$?
+  [ "$rc" -ne 0 ] || fail "the relaunch must fail when the backlog commit refuses"
+  assert_contains "$out" 'could not be moved to In flight' "the spawn plane's post-dispatch failure must surface"
+  assert_contains "$out" 'failed after dispatch' "the failure must be reported as after dispatch"
+  assert_not_contains "$out" 'refused before dispatch' "a dispatched run must not be called a pre-dispatch refusal"
+  [ "$(sed -n 's/^spawn_gen=//p' "$STATE/t1.meta" | tail -1)" != s0 ] \
+    || fail "the fixture must reach the post-dispatch exit: the recorded run was not replaced"
+  assert_grep '## Progress note' "$DATA/t1/brief.md" "the dispatched run's instructions must keep the note section"
+  assert_grep 'a live run holds this' "$DATA/t1/brief.md" "the note text must stay with the dispatched instructions"
+  pass "control: a post-dispatch spawn failure keeps the note with the live run's instructions"
+}
+
 
 # --- run ---------------------------------------------------------------------
 
@@ -1050,3 +1096,4 @@ test_control_relaunch_requires_note_for_nio_scout
 test_control_relaunch_refuses_unhonorable_axes_for_nio
 test_control_relaunch_carries_note_onto_recorded_thread
 test_control_relaunch_spawn_refusal_restores_instructions
+test_control_relaunch_postdispatch_failure_keeps_note

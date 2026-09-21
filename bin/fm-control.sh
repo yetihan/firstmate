@@ -384,17 +384,27 @@ if [ "$RECORDED_HARNESS" = nio-chat-agent ]; then
       || die "could not record task $ID's progress note durably"
     cp -p "$NIO_RELAUNCH_BRIEF" "$NIO_RELAUNCH_JOURNAL.brief-prior" \
       || die "could not preserve task $ID's instructions before recording the progress note"
-    fm_control_append_progress_note "$NIO_RELAUNCH_BRIEF" "$NOTE" \
-      || die "could not append the progress note to task $ID's instructions"
+    if ! fm_control_append_progress_note "$NIO_RELAUNCH_BRIEF" "$NOTE"; then
+      cp -p "$NIO_RELAUNCH_JOURNAL.brief-prior" "$NIO_RELAUNCH_BRIEF" 2>/dev/null || true
+      die "could not append the progress note to task $ID's instructions; they were restored"
+    fi
+    NIO_RELAUNCH_GEN=$(fm_meta_get "$META" spawn_gen)
     if "$SCRIPT_DIR/fm-spawn.sh" "$ID" --relaunch --harness nio-chat-agent; then
       :
     else
       rc=$?
-      # The note never dispatched, so the instructions roll back to the
-      # pre-relaunch bytes instead of claiming a relaunch that did not happen;
-      # the durable note and prior copy stay beside the journal as evidence.
-      cp -p "$NIO_RELAUNCH_JOURNAL.brief-prior" "$NIO_RELAUNCH_BRIEF" 2>/dev/null || true
-      echo "error: relaunch of $ID was refused before dispatch; its instructions were restored" >&2
+      # spawn_gen is the incarnation token. An unchanged token means no
+      # replacement run was ever recorded, so nothing was dispatched and the
+      # instructions roll back to the pre-relaunch bytes; a changed token means
+      # a dispatched run is already working from the appended instructions,
+      # which must stay. The durable note and prior copy remain beside the
+      # journal as evidence either way.
+      if [ "$(fm_meta_get "$META" spawn_gen)" = "$NIO_RELAUNCH_GEN" ]; then
+        cp -p "$NIO_RELAUNCH_JOURNAL.brief-prior" "$NIO_RELAUNCH_BRIEF" 2>/dev/null || true
+        echo "error: relaunch of $ID was refused before dispatch; its instructions were restored" >&2
+      else
+        echo "error: relaunch of $ID failed after dispatch; a dispatched run holds the appended instructions, so they were left in place rather than restored" >&2
+      fi
       exit "$rc"
     fi
     ;;
