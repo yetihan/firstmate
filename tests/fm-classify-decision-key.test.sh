@@ -393,6 +393,41 @@ EOF
   pass "last_state_status_line reports still-open waits as the live state"
 }
 
+# status_current_line is the crew-state consumer of the same effective line: its
+# nothing-open fallback must walk PAST an arbitrary run of trailing
+# decision-closing verbs, not just the prev+latest window the tail scan emits.
+# Two closing verbs after a report filled that window and re-masked the report -
+# the exact defect the fallback exists to kill.
+test_status_current_line_walks_past_trailing_closing_verbs() {
+  local dir f
+  dir=$(case_dir current-line-walk)
+  f="$dir/a.status"
+  cat > "$f" <<'EOF'
+needs-decision [key=a]: first call
+needs-decision [key=b]: second call
+done: local-ready on fm/branch
+captain-held [key=a]: tracked by sample-call
+resolved [key=b]: answered: merge
+EOF
+  [ "$(status_current_line "$f" ship)" = "done: local-ready on fm/branch" ] \
+    || fail "two trailing closing verbs masked the state report: '$(status_current_line "$f" ship)'"
+
+  # A longer run of closers walks just as far back.
+  printf 'resolved [key=c]: answered: teardown\n' >> "$f"
+  [ "$(status_current_line "$f" ship)" = "done: local-ready on fm/branch" ] \
+    || fail "three trailing closing verbs masked the state report: '$(status_current_line "$f" ship)'"
+
+  # A still-open ask under a trailing resolution still reports itself.
+  cat > "$f" <<'EOF'
+done: first pass shipped
+needs-decision [key=second]: proceed or stop
+resolved [key=older]: answered: yes
+EOF
+  [ "$(status_current_line "$f" ship)" = "needs-decision [key=second]: proceed or stop" ] \
+    || fail "an open wait under a trailing resolution did not report itself: '$(status_current_line "$f" ship)'"
+  pass "status_current_line walks past any run of trailing decision-closing verbs"
+}
+
 test_last_state_status_line_plain_and_empty_inputs() {
   local dir f
   dir=$(case_dir plain)
@@ -500,6 +535,7 @@ test_last_state_status_line_reports_reserved_key_lines_as_state() {
 
 test_last_state_status_line_skips_decision_verbs_not_state
 test_last_state_status_line_reports_open_waits_as_state
+test_status_current_line_walks_past_trailing_closing_verbs
 test_last_state_status_line_plain_and_empty_inputs
 test_crew_status_is_finished_matches_reports_only
 test_last_state_status_line_honors_a_torn_final_line

@@ -308,12 +308,35 @@ KIND=$(fm_meta_get "$META" kind)
 WT=$(fm_meta_get "$META" worktree)
 [ -n "$KIND" ] || KIND=ship
 
+# Append the standard relaunch progress-note section to a worker's
+# instructions. The single writer of the section shape on both relaunch paths:
+# the terminal path's record_note and the nio-chat arm's instructions hand-off.
+fm_control_append_progress_note() {  # <brief-file> <note>
+  local brief=$1 note=$2 stamp
+  stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  {
+    echo
+    echo "## Progress note ($stamp)"
+    echo
+    echo "This task was relaunched. Continue from here; the local copy and every"
+    echo "uncommitted change are exactly as the previous worker left them."
+    echo
+    echo "First, check your instruction inbox: list $STATE/$ID.inbox/*.msg, act on"
+    echo "each message in numeric order, then mv each handled file into"
+    echo "$STATE/$ID.inbox/handled/. A steer sent before the relaunch survives there."
+    echo
+    printf '%s\n' "$note"
+  } >> "$brief"
+}
+
 # --- nio-chat-agent lifecycle verbs ------------------------------------------
 # A nio-chat worker has no terminal, so its lifecycle verbs are library calls,
 # not keystrokes: interrupt cancels this task's own active run, exit settles
-# the channel while keeping the thread for later reuse, and relaunch
-# re-dispatches on the recorded thread through the spawn plane's own nio
-# relaunch path. The settled run record is the proof, not a pane read
+# the channel while keeping the thread for later reuse, and relaunch carries
+# the required progress note into the instructions and re-dispatches them on
+# the recorded thread through the spawn plane's own nio relaunch path, while
+# model, effort, and harness changes it cannot honor are refused explicitly.
+# The settled run record is the proof, not a pane read
 # (docs/nio-chat-agent-backend.md).
 if [ "$RECORDED_HARNESS" = nio-chat-agent ]; then
   [ "$BACKEND" = nio-chat ] || die "task $ID records nio-chat-agent on backend '$BACKEND'; its lifecycle verbs run only through the nio-chat runtime"
@@ -330,7 +353,60 @@ if [ "$RECORDED_HARNESS" = nio-chat-agent ]; then
       printf '%s\n' "$out"
       ;;
     relaunch)
-    exec "$SCRIPT_DIR/fm-spawn.sh" "$ID" --relaunch --harness nio-chat-agent
+    # The spawn plane re-dispatches the recorded instructions on the recorded
+    # thread, so a progress note reaches the replacement only through those
+    # instructions - appended here with the same section shape the terminal
+    # path's record_note writes. A scout relaunch requires the note.
+    # Model, effort, and harness stay fail-closed on this runtime: the desktop
+    # agent owns model and effort selection, and a recorded nio thread
+    # re-dispatches only through the nio-chat runtime, so none of the three
+    # may be silently dropped.
+    case "$KIND" in
+      ship|scout)
+        [ "$NOTE_SET" = 1 ] && [ -n "$NOTE" ] \
+          || die "relaunch of a $KIND task requires --note (or --note-file): the replacement worker inherits the local copy but none of the conversation, so it must be told what happened"
+        ;;
+      *)
+        die "task $ID records kind '$KIND', which has no defined relaunch shape"
+        ;;
+    esac
+    [ "$MODEL_SET" = 0 ] \
+      || die "--model cannot be honored by a nio-chat relaunch: the NIO Chat desktop agent owns model selection; refusing rather than silently dropping it"
+    [ "$EFFORT_SET" = 0 ] \
+      || die "--effort cannot be honored by a nio-chat relaunch: the NIO Chat desktop agent owns effort selection; refusing rather than silently dropping it"
+    [ "$HARNESS_SET" = 0 ] || [ "$NEW_HARNESS" = nio-chat-agent ] \
+      || die "--harness '$NEW_HARNESS' cannot be honored by a nio-chat relaunch: the recorded thread re-dispatches only through the nio-chat runtime"
+    NIO_RELAUNCH_BRIEF="$DATA/$ID/brief.md"
+    [ -f "$NIO_RELAUNCH_BRIEF" ] \
+      || die "task $ID has no instructions at $NIO_RELAUNCH_BRIEF; refusing to relaunch a worker with nothing to work from"
+    NIO_RELAUNCH_JOURNAL="$STATE/$ID.control-relaunch"
+    printf '%s\n' "$NOTE" > "$NIO_RELAUNCH_JOURNAL.note" \
+      || die "could not record task $ID's progress note durably"
+    cp -p "$NIO_RELAUNCH_BRIEF" "$NIO_RELAUNCH_JOURNAL.brief-prior" \
+      || die "could not preserve task $ID's instructions before recording the progress note"
+    if ! fm_control_append_progress_note "$NIO_RELAUNCH_BRIEF" "$NOTE"; then
+      cp -p "$NIO_RELAUNCH_JOURNAL.brief-prior" "$NIO_RELAUNCH_BRIEF" 2>/dev/null || true
+      die "could not append the progress note to task $ID's instructions; they were restored"
+    fi
+    NIO_RELAUNCH_GEN=$(fm_meta_get "$META" spawn_gen)
+    if "$SCRIPT_DIR/fm-spawn.sh" "$ID" --relaunch --harness nio-chat-agent; then
+      :
+    else
+      rc=$?
+      # spawn_gen is the incarnation token. An unchanged token means no
+      # replacement run was ever recorded, so nothing was dispatched and the
+      # instructions roll back to the pre-relaunch bytes; a changed token means
+      # a dispatched run is already working from the appended instructions,
+      # which must stay. The durable note and prior copy remain beside the
+      # journal as evidence either way.
+      if [ "$(fm_meta_get "$META" spawn_gen)" = "$NIO_RELAUNCH_GEN" ]; then
+        cp -p "$NIO_RELAUNCH_JOURNAL.brief-prior" "$NIO_RELAUNCH_BRIEF" 2>/dev/null || true
+        echo "error: relaunch of $ID was refused before dispatch; its instructions were restored" >&2
+      else
+        echo "error: relaunch of $ID failed after dispatch; a dispatched run holds the appended instructions, so they were left in place rather than restored" >&2
+      fi
+      exit "$rc"
+    fi
     ;;
   esac
   exit 0
@@ -810,27 +886,13 @@ safe_checkpoint() {
 # never rewritten: a secondmate reconciles its own home's records at startup,
 # so the note stays parent-side audit evidence.
 record_note() {
-  local stamp
   [ -n "$NOTE" ] || return 0
-  stamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   printf '%s\n' "$NOTE" > "$NOTE_FILE"
   case "$KIND" in
     ship|scout)
       cp -p "$RELAUNCH_BRIEF" "$BRIEF_PRIOR" \
         || die "could not preserve task $ID's instructions before recording the progress note"
-      {
-        echo
-        echo "## Progress note ($stamp)"
-        echo
-        echo "This task was relaunched. Continue from here; the local copy and every"
-        echo "uncommitted change are exactly as the previous worker left them."
-        echo
-        echo "First, check your instruction inbox: list $STATE/$ID.inbox/*.msg, act on"
-        echo "each message in numeric order, then mv each handled file into"
-        echo "$STATE/$ID.inbox/handled/. A steer sent before the relaunch survives there."
-        echo
-        printf '%s\n' "$NOTE"
-      } >> "$RELAUNCH_BRIEF" \
+      fm_control_append_progress_note "$RELAUNCH_BRIEF" "$NOTE" \
         || die "could not append the progress note to task $ID's instructions"
       ;;
   esac

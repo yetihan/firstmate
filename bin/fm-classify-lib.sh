@@ -152,29 +152,51 @@ last_status_line() {  # <status-file> [<previous-event-var>]
   printf '%s\n' "${scan##*$'\n'}"
 }
 
+# 0 when <line> is a recognized status event - a known status verb or a bare
+# legacy free-text line a captain token leads - so continuation prose that
+# merely mentions one cannot hide a declaration. The single owner of the
+# recognition predicate shared by the prev+latest tail scan and the full walk;
+# when <verb-var> is given it receives the line's verb ('' when unrecognized).
+_fm_status_event_recognized() {  # <line> [verb-var]
+  local line=$1 var=${2:-} verb
+  case "$line" in *:*) status_line_verb "$line" verb ;; *) verb='' ;; esac
+  [ -z "$var" ] || printf -v "$var" '%s' "$verb"
+  case "$verb" in
+    working|needs-decision|blocked|done|failed|note|\
+    "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}"|\
+    "${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}"|\
+    "${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}") return 0 ;;
+  esac
+  _fm_classify_matches "$line" "^[[:space:]]*(${FM_CAPTAIN_RE:-$FM_CLASSIFY_CAPTAIN_RE_DEFAULT})"
+}
+
 # Print "<previous event>\n<latest event>" for the status lines on stdin, and
 # return 1 when the stream holds no recognized event at all, so a caller reading
 # a bounded window knows to widen it. A stream without events keeps its last
 # nonblank line as the latest, matching the read this replaced.
 # Keep decision-closing events: skipping a resolved line would revive its opener.
-# A bare legacy free-text line counts as an event only when a captain token leads
-# it, so continuation prose that merely mentions one cannot hide a declaration.
 _fm_status_event_scan() {
-  local line last='' prev='' fallback='' verb legacy_re
-  legacy_re="^[[:space:]]*(${FM_CAPTAIN_RE:-$FM_CLASSIFY_CAPTAIN_RE_DEFAULT})"
+  local line last='' prev='' fallback=''
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in *[![:space:]]*) fallback=$line ;; *) continue ;; esac
-    case "$line" in *:*) status_line_verb "$line" verb ;; *) verb='' ;; esac
-    case "$verb" in
-      working|needs-decision|blocked|done|failed|note|\
-      "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}"|\
-      "${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}"|\
-      "${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}") prev=$last; last=$line ;;
-      *) _fm_classify_matches "$line" "$legacy_re" && { prev=$last; last=$line; } ;;
-    esac
+    _fm_status_event_recognized "$line" && { prev=$last; last=$line; }
   done
   printf '%s\n%s\n' "$prev" "${last:-$fallback}"
   [ -n "$last" ]
+}
+
+# Print every recognized status event on stdin in file order, oldest first.
+# status_current_line's nothing-open fallback walks this list newest-first; the
+# prev+latest tail above cannot serve it, because two or more trailing
+# decision-closing verbs (resolved/captain-held) would fill the whole window and
+# mask the state report beneath them - the exact defect the fallback exists to
+# fix.
+_fm_status_event_walk() {
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in *[![:space:]]*) ;; *) continue ;; esac
+    _fm_status_event_recognized "$line" && printf '%s\n' "$line"
+  done
 }
 
 # 0 when <line> matches the extended regex <pattern> case-insensitively, leaving
@@ -638,7 +660,7 @@ EOF
       while IFS= read -r line; do
         [ -n "$line" ] && walked_events+=("$line")
       done <<EOF
-$(_fm_status_event_scan < "$1" 2>/dev/null || true)
+$(_fm_status_event_walk < "$1" 2>/dev/null || true)
 EOF
     fi
     i=${#walked_events[@]}
