@@ -413,8 +413,9 @@ case "${1:-}" in
       [ "$#" -eq 4 ] || fail 'verdict needs judged-head, source-url, actor and summary'
       fm_pr_head_valid "$1" || fail 'an exact judged commit is required'
       case "$3" in captain|fleet|maintainer|nobody) ;; *) fail 'invalid required actor' ;; esac
-      case "$2" in "$url"\#*) ;; *) fail 'verdict source must be a comment or review on this contribution' ;; esac
-      jq --arg head "$1" --arg source "$2" --arg actor "$3" --arg summary "$4" \
+      source_url=$(jq_lib -nr --arg url "$2" '$url | host_normalized')
+      case "$source_url" in "$url"\#*) ;; *) fail 'verdict source must be a comment or review on this contribution' ;; esac
+      jq --arg head "$1" --arg source "$source_url" --arg actor "$3" --arg summary "$4" \
         '.verdict={head:$head,source:$source,actor:$actor,summary:$summary}' "$TMP/row.json" > "$TMP/update.json"
     fi
     write_record "$task" "$TMP/update.json"

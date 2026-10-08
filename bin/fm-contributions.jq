@@ -45,7 +45,7 @@ def projected($input; $saved; $now; $max_age):
     | ([$input.backlog.records[]? | select(.structured and
          (.id == $k.task or ((.links // []) | map(host_normalized) | index($k.url)) != null))
          | select(.hold_bucket == "live")] | first) as $hold
-    | ([$input.tasks[]? | select(.id == $k.task and .pr.url == $k.url)
+    | ([$input.tasks[]? | select(.id == $k.task and ((.pr.url | host_normalized) == $k.url))
        | {head:(.pr.head | select(. != null and . != "")), merge_authority:(.merge_authority // "unknown")}] | first) as $task
     | ($task.head // null) as $recorded_head
     | ($task.merge_authority // "unknown") as $merge_authority
