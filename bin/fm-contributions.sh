@@ -12,7 +12,10 @@
 # snapshot is read-only and never contacts a forge. Its input is the canonical
 # fleet snapshot's backlog/tasks pair; --all adds rows for supervisor inspection.
 # Every URL explicitly linked by a structured backlog row or a task's pr= is
-# owned. Previously observed URLs remain in data/<task>/contributions.json after
+# owned. URL identity lowercases the host (scheme and host are case-insensitive,
+# the path is not), so two spellings of one host are one contribution and can
+# never fork its record or restart its failure episode. Previously observed
+# URLs remain in data/<task>/contributions.json after
 # endpoint teardown. Repository-wide PR discovery never establishes ownership.
 # GitHub PRs and issues are supported; other forges remain visibly unmeasured.
 #
@@ -119,7 +122,8 @@ read_saved() {
     if ! jq -e --arg task "$(basename "$(dirname "$file")")" '.task == $task' "$file" >/dev/null; then
       ERRORS=$((ERRORS + 1)); continue
     fi
-    jq -c . "$file" >> "$TMP/saved.jsonl"
+    jq_lib -nc --slurpfile file "$file" \
+      '$file[0] | .records |= map(.url |= host_normalized)' >> "$TMP/saved.jsonl"
   done
   jq -s . "$TMP/saved.jsonl" > "$TMP/saved.json"
 }
@@ -166,7 +170,9 @@ write_record() { # task record-json-file
   # Preserve other contributions owned by this same task.
   if [ -f "$file" ]; then
     jq_lib -ne --arg task "$task" --slurpfile record "$file" '$record[0] | valid_record and .task == $task' >/dev/null || fail 'invalid stored contribution record'
-    jq --slurpfile row "$2" '.records = ([.records[] | select(.url != $row[0].url)] + $row)' "$file" > "$staged"
+    jq_lib -n --slurpfile row "$2" --slurpfile file "$file" \
+      '$file[0] | .records = ([.records[] | select((.url | host_normalized) != ($row[0].url | host_normalized))] + $row)' \
+      > "$staged"
   else
     jq -n --arg task "$task" --slurpfile row "$2" '{schema:"fm-contributions.v1",task:$task,records:$row}' > "$staged"
   fi
@@ -393,6 +399,7 @@ case "${1:-}" in
     action=$1; shift
     [ "$#" -ge 3 ] || fail 'task, URL and evidence required'
     task=$1; url=$2; shift 2
+    url=$(jq_lib -nr --arg url "$url" '$url | host_normalized')
     acquire; get_input; read_saved
     jq_lib -ne --slurpfile input "$TMP/input.json" --arg task "$task" --arg url "$url" --slurpfile saved "$TMP/saved.json" \
       'any(known($input[0];$saved[0])[]; .task == $task and .url == $url)' >/dev/null \

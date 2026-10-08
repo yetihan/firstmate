@@ -788,8 +788,47 @@ test_late_owner_keeps_failure_episode_suppressed() {
   pass 'a late owner does not restart a shared forge failure episode'
 }
 
+test_failure_episode_survives_host_spelling_drift() {
+  local home out url='https://gitlab.com/o/r/-/merge_requests/25'
+  home=$(new_home spelling-drift)
+  mkdir -p "$home/root/bin" "$home/wt"
+  printf '#!/bin/sh\nexit 0\n' > "$home/root/bin/fm-guard.sh"
+  chmod +x "$home/root/bin/fm-guard.sh"
+  printf 'worktree=%s/wt\nkind=ship\n' "$home" > "$home/state/delivery.meta"
+  chmod 600 "$home/state/delivery.meta"
+  printf -- '- [ ] delivery - Filed %s (repo: sample) (kind: ship)\n' "$url" >> "$home/data/backlog.md"
+  out=$(with_home "$home" env FM_CONTRIBUTIONS_NOW=2026-09-16T09:00:00Z "$ROOT/bin/fm-contributions.sh" poll) \
+    || fail 'initial unmeasured-forge poll failed'
+  [ "$out" = "contributions: observation unavailable for $url" ] \
+    || fail "the first unmeasured-forge failure did not wake: $out"
+  # The same host spelled in mixed case is the same contribution: the running
+  # failure episode must not restart for the new spelling.
+  { printf '# Backlog\n\n## Queued\n'
+    printf -- '- [ ] delivery - Filed https://GitLab.com/o/r/-/merge_requests/25 (repo: sample) (kind: ship)\n'; } \
+    > "$home/data/backlog.md"
+  out=$(with_home "$home" env FM_CONTRIBUTIONS_NOW=2026-09-16T10:00:00Z "$ROOT/bin/fm-contributions.sh" poll) \
+    || fail 'mixed-case-spelling poll failed'
+  [ -z "$out" ] || fail "a host-case respelling restarted the failure episode: $out"
+  jq -e --arg url "$url" '.records | length == 1 and .[0].url == $url
+    and .[0].error != null and .[0].checked_at == "2026-09-16T10:00:00Z"' \
+    "$home/data/delivery/contributions.json" >/dev/null \
+    || fail 'a respelled host forked or dropped the contribution record'
+  # A legacy record stored under a mixed-case host is the same contribution too.
+  jq -n --arg at "$NOW" '{schema:"fm-contributions.v1",task:"delivery",records:[{
+    url:"https://GitLab.com/o/r/-/merge_requests/25",kind:"pr",checked_at:$at,
+    error:"forge observation unavailable or changed during read",
+    pending:[],seen:[],verdict:null,observation:null}]}' > "$home/data/delivery/contributions.json"
+  out=$(with_home "$home" env FM_CONTRIBUTIONS_NOW=2026-09-16T11:00:00Z "$ROOT/bin/fm-contributions.sh" poll) \
+    || fail 'legacy mixed-case record poll failed'
+  [ -z "$out" ] || fail "a legacy mixed-case record restarted the failure episode: $out"
+  jq -e --arg url "$url" '.records | length == 1 and .[0].url == $url and .[0].error != null' \
+    "$home/data/delivery/contributions.json" >/dev/null \
+    || fail 'a legacy mixed-case record did not merge into its normalized identity'
+  pass 'a failure episode and its record survive host-case respelling of the same URL'
+}
+
 failures=0
-for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_done_task_open_pr_still_observed test_failure_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed; do
+for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_done_task_open_pr_still_observed test_failure_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed test_failure_episode_survives_host_spelling_drift; do
   ( "$test_name" ) || failures=$((failures + 1))
 done
 [ "$failures" -eq 0 ] || fail "$failures contribution regressions"

@@ -2,6 +2,11 @@
 def canonical_url:
   type == "string" and (test("^https://github.com/[A-Za-z0-9-]+/[A-Za-z0-9._-]+/(pull|issues)/[1-9][0-9]*$")
     or test("^https://[A-Za-z0-9.-]+/[A-Za-z0-9._/-]+/-/merge_requests/[1-9][0-9]*$"));
+def host_normalized:
+  if type == "string" and test("^https://[^/]+/")
+  then capture("^(?<scheme>https://)(?<host>[^/]+)(?<path>/.*)$") as $c
+    | $c.scheme + ($c.host | ascii_downcase) + $c.path
+  else . end;
 def sha: type == "string" and test("^[a-fA-F0-9]{40}$");
 def valid_record:
   try (.schema == "fm-contributions.v1" and (.task | type == "string")
@@ -26,10 +31,10 @@ def valid_record:
         else (.ready | type == "boolean") end))))) catch false;
 def known($input; $saved):
   ([($input.tasks // [])[] | select(.kind != "secondmate")
-     | select(.pr.url | canonical_url) | {task:.id,url:.pr.url}]
+     | select(.pr.url | canonical_url) | {task:.id,url:(.pr.url | host_normalized)}]
    + [($input.backlog.records // [])[] | select(.structured == true) as $task
-      | ($task.links // [])[] | select(canonical_url) | {task:$task.id,url:.}]
-   + [$saved[] | .task as $task | .records[] | {task:$task,url}])
+      | ($task.links // [])[] | select(canonical_url) | {task:$task.id,url:(. | host_normalized)}]
+   + [$saved[] | .task as $task | .records[] | {task:$task,url:(.url | host_normalized)}])
   | unique_by([.task,.url]);
 def latest_checks:
   group_by(.name) | map(sort_by([(.started_at // ""),(.id // 0)]) | last);
@@ -38,7 +43,7 @@ def projected($input; $saved; $now; $max_age):
   | [$known[] as $k
     | ([$saved[] | select(.task == $k.task) | .records[] | select(.url == $k.url)] | first) as $record
     | ([$input.backlog.records[]? | select(.structured and
-         (.id == $k.task or ((.links // []) | index($k.url)) != null))
+         (.id == $k.task or ((.links // []) | map(host_normalized) | index($k.url)) != null))
          | select(.hold_bucket == "live")] | first) as $hold
     | ([$input.tasks[]? | select(.id == $k.task and .pr.url == $k.url)
        | {head:(.pr.head | select(. != null and . != "")), merge_authority:(.merge_authority // "unknown")}] | first) as $task
