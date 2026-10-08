@@ -258,7 +258,7 @@ fm_backend_cmux_refuse_unauth() {
 # the app has been running), since that is indistinguishable from a slow
 # launch on the wire.
 fm_backend_cmux_ensure_running() {
-  local state i
+  local state
   state=$(fm_backend_cmux_ping_state)
   case "$state" in
     ok) return 0 ;;
@@ -272,7 +272,7 @@ fm_backend_cmux_ensure_running() {
       ;;
   esac
   open -a cmux >/dev/null 2>&1 || { echo "error: failed to launch cmux ('open -a cmux' failed)" >&2; return 1; }
-  for i in $(seq 1 20); do
+  for _ in $(seq 1 20); do
     state=$(fm_backend_cmux_ping_state)
     case "$state" in
       ok) return 0 ;;
@@ -355,7 +355,7 @@ fm_backend_cmux_surface_id_for_workspace() {  # <workspace_id>
 # single racing lookup fails the whole spawn. Echoes "<workspace_id>
 # <surface_id>" on success.
 fm_backend_cmux_create_task() {  # <label> <cwd>
-  local label=$1 cwd=$2 title dup out wsid sfid attempt
+  local label=$1 cwd=$2 title dup out wsid sfid
   title=$(fm_backend_cmux_scoped_title "$label")
   dup=$(fm_backend_cmux_workspace_id_for_label "$title")
   if [ -n "$dup" ]; then
@@ -367,14 +367,14 @@ fm_backend_cmux_create_task() {  # <label> <cwd>
     return 1
   }
   wsid=""
-  for attempt in 1 2 3 4 5; do
+  for _ in 1 2 3 4 5; do
     wsid=$(fm_backend_cmux_workspace_id_for_label "$title")
     [ -n "$wsid" ] && break
     sleep 0.3
   done
   [ -n "$wsid" ] || { echo "error: could not resolve a cmux workspace id for '$title' after creation" >&2; return 1; }
   sfid=""
-  for attempt in 1 2 3 4 5; do
+  for _ in 1 2 3 4 5; do
     sfid=$(fm_backend_cmux_surface_id_for_workspace "$wsid")
     [ -n "$sfid" ] && break
     sleep 0.3
