@@ -14,7 +14,9 @@
 # Every URL explicitly linked by a structured backlog row or a task's pr= is
 # owned. URL identity lowercases the host (scheme and host are case-insensitive,
 # the path is not), so two spellings of one host are one contribution and can
-# never fork its record or restart its failure episode. Previously observed
+# never fork its record or restart its failure episode. Records stored before
+# that identity rule may hold such a fork; reads collapse it to the
+# verdict-bearing record, else the newest check. Previously observed
 # URLs remain in data/<task>/contributions.json after
 # endpoint teardown. Repository-wide PR discovery never establishes ownership.
 # GitHub PRs and issues are supported; other forges remain visibly unmeasured.
@@ -123,7 +125,7 @@ read_saved() {
       ERRORS=$((ERRORS + 1)); continue
     fi
     jq_lib -nc --slurpfile file "$file" \
-      '$file[0] | .records |= map(.url |= host_normalized)' >> "$TMP/saved.jsonl"
+      '$file[0] | collapse_host_forks' >> "$TMP/saved.jsonl"
   done
   jq -s . "$TMP/saved.jsonl" > "$TMP/saved.json"
 }

@@ -7,6 +7,18 @@ def host_normalized:
   then capture("^(?<scheme>https://)(?<host>[^/]+)(?<path>/.*)$") as $c
     | $c.scheme + ($c.host | ascii_downcase) + $c.path
   else . end;
+# Legacy raw-url writes could fork one contribution into two records under
+# different host spellings; once hosts normalize those are one identity, and
+# file-order consumers plus the next dedup write would silently drop a
+# recorded verdict on the losing fork. Collapse forks as records are read,
+# keeping the verdict-bearing record (a recorded arbitration is not
+# re-observable from the forge) and otherwise the newest check.
+def collapse_host_forks:
+  .records |= (map(.url |= host_normalized)
+    | group_by(.url)
+    | map(sort_by([(if .verdict != null then 0 else 1 end),
+                   -((.checked_at // "") | try fromdateiso8601 catch 0)])
+           | first));
 def sha: type == "string" and test("^[a-fA-F0-9]{40}$");
 def valid_record:
   try (.schema == "fm-contributions.v1" and (.task | type == "string")

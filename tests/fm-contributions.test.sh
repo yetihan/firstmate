@@ -827,6 +827,40 @@ test_failure_episode_survives_host_spelling_drift() {
   pass 'a failure episode and its record survive host-case respelling of the same URL'
 }
 
+test_legacy_host_fork_keeps_its_verdict() {
+  local home out url='https://gitlab.com/o/r/-/merge_requests/25'
+  home=$(new_home legacy-fork)
+  mkdir -p "$home/root/bin" "$home/wt" "$home/data/delivery"
+  printf '#!/bin/sh\nexit 0\n' > "$home/root/bin/fm-guard.sh"
+  chmod +x "$home/root/bin/fm-guard.sh"
+  printf 'worktree=%s/wt\nkind=ship\n' "$home" > "$home/state/delivery.meta"
+  chmod 600 "$home/state/delivery.meta"
+  printf -- '- [ ] delivery - Filed %s (repo: sample) (kind: ship)\n' "$url" >> "$home/data/backlog.md"
+  # Pre-identity-rule data: the same contribution forked into two records under
+  # two host spellings, with the recorded verdict on the second fork.
+  jq -n --arg at "$NOW" --arg head "$HEAD_A" '{schema:"fm-contributions.v1",task:"delivery",records:[
+    {url:"https://gitlab.com/o/r/-/merge_requests/25",kind:"pr",checked_at:$at,
+     error:"forge observation unavailable or changed during read",
+     pending:[],seen:[],verdict:null,observation:null},
+    {url:"https://GitLab.com/o/r/-/merge_requests/25",kind:"pr",checked_at:$at,
+     error:null,pending:[],seen:[],
+     verdict:{head:$head,source:"https://gitlab.com/o/r/-/merge_requests/25#note_1",
+       actor:"maintainer",summary:"awaiting maintainer"},observation:null}]}' \
+    > "$home/data/delivery/contributions.json"
+  out=$(with_home "$home" "$ROOT/bin/fm-contributions.sh" poll) \
+    || fail 'legacy-fork poll failed'
+  [ "$out" = "contributions: observation unavailable for $url" ] \
+    || fail "the surviving record's episode state did not drive the wake: $out"
+  jq -e --arg url "$url" --arg head "$HEAD_A" '.records | length == 1
+    and .[0].url == $url and .[0].error != null
+    and .[0].verdict.head == $head
+    and .[0].verdict.actor == "maintainer"
+    and .[0].verdict.source == "https://gitlab.com/o/r/-/merge_requests/25#note_1"' \
+    "$home/data/delivery/contributions.json" >/dev/null \
+    || fail 'a poll over legacy fork data dropped the recorded verdict'
+  pass 'a legacy host-spelling fork collapses without dropping its verdict'
+}
+
 test_task_head_enrichment_survives_host_spelling() {
   local home out url='https://gitlab.com/o/r/-/merge_requests/25'
   home=$(new_home enrichment-drift)
@@ -870,7 +904,7 @@ test_verdict_source_host_case_is_same_contribution() {
 }
 
 failures=0
-for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_done_task_open_pr_still_observed test_failure_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed test_failure_episode_survives_host_spelling_drift test_task_head_enrichment_survives_host_spelling test_verdict_source_host_case_is_same_contribution; do
+for test_name in test_actor_coverage test_stale_verdict test_unchecked_is_not_silence test_newest_check_has_no_verdict test_comment_wake test_review_wake test_inline_wake test_ready_issue_wake test_fresh_issue_requires_maintainer test_missing_lane_remains_missing test_partial_freshness_keeps_measured_rows test_malformed_record_cannot_prove_silence test_issue_timeline_and_exact_ack test_verdict_retains_judged_head test_observed_replacement_refreshes_verdict test_unobserved_head_leaves_verdict_unknown test_away_yolo_is_fleet_work test_away_yolo_cross_home_is_fleet_work test_retired_and_unsupported_coverage test_unsupported_forge_is_not_fleet_work test_held_unsupported_forge_is_not_captain_work test_shared_contribution_signal_wakes_once test_watcher_keeps_diagnostics_separate_from_contribution_wakes test_expired_child_unsupported_forge_stays_unmeasured test_watcher_surfaces_new_contribution_once test_home_summary_coverage test_unreadable_pending_is_not_empty test_budget_refusal_between_calls test_budget_bounded_call_timeout test_genuine_failure_near_deadline_is_unavailable test_shared_url_observed_once test_terminal_contribution_settles test_late_owner_inherits_terminal_observation test_done_task_open_pr_still_observed test_failure_wakes_once_per_episode test_late_owner_keeps_failure_episode_suppressed test_failure_episode_survives_host_spelling_drift test_legacy_host_fork_keeps_its_verdict test_task_head_enrichment_survives_host_spelling test_verdict_source_host_case_is_same_contribution; do
   ( "$test_name" ) || failures=$((failures + 1))
 done
 [ "$failures" -eq 0 ] || fail "$failures contribution regressions"
