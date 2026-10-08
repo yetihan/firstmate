@@ -197,7 +197,10 @@ PROJECT_JQ='
     elif .current_role == "held" then {key:"held"}
     elif .state == "in_flight" and $live_ep then {key:"working"}
     elif .state == "in_flight" then {key:"inflight_stale"}
-    elif .captain_actionable then {key:"waiting_captain"}
+    # An aged undated captain hold still waits on the captain in this grouping:
+    # snapshot captain_actionable is the live captain-call triage
+    # (hold_bucket == "live"), not who the row is held for.
+    elif .captain_actionable or .hold_bucket == "aged" then {key:"waiting_captain"}
     elif ((.unresolved_blocker_ids | length) > 0) then {key:"queued_blocked"}
     else {key:"queued"} end;
   def status_reason($key):
@@ -212,7 +215,7 @@ PROJECT_JQ='
   def era_of:
     if .state == "done" then {date: (.done // .reported // .merged), why: "完成日"}
     else {date: (.since // .done), why: "开始日"} end
-    | if .date != null then {group: .date[0:7], reason: .why + " " + .date}
+    | if .date != null then {group: .date[0:7], reason: (.why + " " + .date)}
       else {group: "未知时段", reason: "无 since/完成日期"} end;
   def theme_of($cfg):
     ((.title + " " + (.body_excerpt // "")) | ascii_downcase) as $hay
@@ -221,7 +224,7 @@ PROJECT_JQ='
          | ($entry.keyword | ascii_downcase) as $needle
          | select($hay | contains($needle))
          | $entry ][0] // null) as $hit
-    | if $hit != null then {group: $hit.group, reason: "关键词命中: " + $hit.keyword + " → " + $hit.group}
+    | if $hit != null then {group: $hit.group, reason: ("关键词命中: " + $hit.keyword + " → " + $hit.group)}
       else {group: "其他", reason: "无关键词命中 → 其他"} end;
   . as $snap
   | ($snap.tasks | reduce .[] as $t ({}; .[$t.id] = $t)) as $live

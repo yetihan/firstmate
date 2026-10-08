@@ -92,6 +92,9 @@ write_fixture() {  # <home>
 
 ## Queued
 - [ ] queued-captain - Queued captain call (repo: alpha) (kind: ship) (hold: pick a color) (hold-kind: captain) (since 2026-08-04)
+- [ ] queued-captain-live - Fresh captain call (repo: alpha) (kind: ship) (hold: pick a shade) (hold-kind: captain) (since 2026-08-30)
+- [ ] queued-captain-dated - Deferred captain call (repo: alpha) (kind: ship) (hold: revisit later) (hold-kind: captain) (hold-until: 2099-01-01) (since 2026-08-31)
+- [ ] queued-captain-blocked - Captain call behind a blocker blocked-by: ship-live - gated on the ship (repo: beta) (kind: ship) (hold: pick a tone) (hold-kind: captain) (since 2026-09-01)
 - [ ] queued-blocked - Queued blocked task blocked-by: ship-live - needs the ship first (repo: beta) (kind: ship) (since 2026-08-05)
 - [ ] queued-plain - Plain queued work (repo: beta) (kind: chore) (since 2026-08-06)
 a free-form note line without canonical syntax
@@ -160,11 +163,14 @@ test_status_classification_covers_every_rule() {
       and $c["scout-dead"] == "在航·无活动端点"
       and $c["held-other"] == "已搁置"
       and $c["queued-captain"] == "等待队长"
+      and $c["queued-captain-live"] == "等待队长"
+      and $c["queued-captain-dated"] == "排队·就绪"
+      and $c["queued-captain-blocked"] == "排队·被阻塞"
       and $c["queued-blocked"] == "排队·被阻塞"
       and $c["queued-plain"] == "排队·就绪"
       and $c["done-merged"] == "已完成"
       and $c["done-report"] == "已完成"
-      and $c["free-7"] == "自由文本行"
+      and $c["free-10"] == "自由文本行"
   ' >/dev/null || fail "status classification wrong: $out"
   printf '%s' "$out" | jq -e '
     [.classification[] | select(.id == "queued-blocked") | .reason][0]
@@ -263,8 +269,8 @@ test_render_is_deterministic_and_carries_the_payload() {
     "the placeholder must be replaced in the published page"
   extracted=$(sed -n '/<script id="task-dashboard-data" type="application\/json">/,/<\/script>/p' \
     "$home/data/dashboard.html" | sed '1d;$d')
-  printf '%s\n' "$extracted" | jq -e '.schema == "fm-task-dashboard.v1" and (.tasks | length) == 9' >/dev/null \
-    || fail "the page payload must round-trip with all nine cards"
+  printf '%s\n' "$extracted" | jq -e '.schema == "fm-task-dashboard.v1" and (.tasks | length) == 12' >/dev/null \
+    || fail "the page payload must round-trip with all twelve cards"
   pass "pinned renders are byte-identical and the page carries a readable payload"
 }
 
@@ -314,8 +320,8 @@ test_rendered_page_groups_and_discloses() {
     [.foot[] | select(contains("ghost-task"))] | length == 1
   ' >/dev/null || fail "the page footer must disclose the stale override: $out"
   printf '%s' "$out" | jq -e '
-    [.stats[] | select(.label == "任务总数")][0].n == 9
-  ' >/dev/null || fail "the stat strip must count all nine cards: $out"
+    [.stats[] | select(.label == "任务总数")][0].n == 12
+  ' >/dev/null || fail "the stat strip must count all twelve cards: $out"
   pass "the rendered page leads with manual groups, badges outputs, and discloses stale overrides"
 }
 
