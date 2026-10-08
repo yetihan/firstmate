@@ -25,8 +25,9 @@
 #   status   done -> 已完成; in flight with a live endpoint -> 进行中;
 #            in flight without a live endpoint -> 在航·无活动端点;
 #            held for the captain (hold-kind: captain) -> 等待队长;
-#            held otherwise -> 已搁置; queued and captain-actionable ->
-#            等待队长; queued with unresolved blockers -> 排队·被阻塞;
+#            held otherwise -> 已搁置; queued and captain-actionable or
+#            an aged undated captain hold -> 等待队长; queued with
+#            unresolved blockers -> 排队·被阻塞;
 #            otherwise -> 排队·就绪. Unstructured backlog rows -> 自由文本行.
 #   era      YYYY-MM of the anchor date - the completion date for done rows,
 #            otherwise the since date; neither -> 未知时段.

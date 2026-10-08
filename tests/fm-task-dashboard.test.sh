@@ -146,7 +146,7 @@ EOF
 groups_json() {  # <home> <dim> [extra args...]
   local home=$1 dim=$2
   shift 2
-  PATH="$home/fakebin:$PATH" FM_HOME="$home" \
+  PATH="$home/fakebin:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW="$PINNED_NOW" \
     "$DASH" groups "$dim" --json "$@"
 }
 
