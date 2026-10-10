@@ -100,8 +100,9 @@ test_stale_enqueue_before_suppressor() {
   # A stale pane sitting on a captain-relevant status is actionable when the crew
   # is not provably working, so give the window one and prime the .seen-* marker
   # to its current signature so the per-poll signal scan does not pre-empt the
-  # stale wake with a signal wake.
-  printf 'done: ready in branch fm/stale\n' > "$state/stale.status"
+  # stale wake with a signal wake. A finished status is not captain-relevant
+  # here: finished panes ride the finished resurface cadence instead.
+  printf 'blocked: waiting on upstream review\n' > "$state/stale.status"
   prime_status_seen "$state" "$state/stale.status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "idle prompt")

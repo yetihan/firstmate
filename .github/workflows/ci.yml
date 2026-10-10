@@ -110,7 +110,13 @@ jobs:
       - name: Install the Pi package for the Pi extension tests
         run: |
           set -eu
-          npm install -g @earendil-works/pi-coding-agent
+          # Pinned to the newest Pi the extension fixtures are verified against
+          # (0.87.0): Pi 0.99+ renamed the HTML tool renderer's
+          # getToolDefinition dependency to getToolRenderers and changed stock
+          # ToolExecutionComponent rendering, so an unpinned latest install
+          # fails these lanes the day upstream ships. Bump the pin only
+          # together with adapting .pi/extensions and the Pi-facing fixtures.
+          npm install -g @earendil-works/pi-coding-agent@0.87.0
           npm ls -g --depth 0 @earendil-works/pi-coding-agent
       - name: Run portable parallel shard 1
         run: |
@@ -213,10 +219,16 @@ jobs:
       # The Pi extension tests read the installed Pi package's own types and
       # runtime, so without it they gate-skip and pass silently. It is a public
       # npm package and needs no credential, so CI can hold the real thing.
+      # Pinned to the newest Pi the extension fixtures are verified against
+      # (0.87.0): Pi 0.99+ renamed the HTML tool renderer's getToolDefinition
+      # dependency to getToolRenderers and changed stock ToolExecutionComponent
+      # rendering, so an unpinned latest install fails these lanes the day
+      # upstream ships. Bump the pin only together with adapting .pi/extensions
+      # and the Pi-facing fixtures.
       - name: Install the Pi package for the Pi extension tests
         run: |
           set -eu
-          npm install -g @earendil-works/pi-coding-agent
+          npm install -g @earendil-works/pi-coding-agent@0.87.0
           npm ls -g --depth 0 @earendil-works/pi-coding-agent
       - name: Run portable serial shard ${{ matrix.shard }}
         env:

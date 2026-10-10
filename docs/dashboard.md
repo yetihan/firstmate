@@ -20,7 +20,7 @@ Every task is classified along five dimensions, and the page switches between th
 
 - 仓库 (repo): the record's `(repo: ...)` field; unmarked rows group under 未标仓库.
 - 类型 (kind): the record's `(kind: ...)` field.
-- 状态 (status): done, in flight with a live endpoint, in flight without one, waiting on the captain (held for it, or queued and captain-actionable), held otherwise, queued and blocked, queued and ready, or a free-form backlog line.
+- 状态 (status): done, in flight with a live endpoint, in flight without one, waiting on the captain (held for it, or queued and captain-actionable, or queued with an aged undated captain hold), held otherwise, queued and blocked, queued and ready, or a free-form backlog line.
 - 时段 (era): the month of the anchor date - the completion date for done rows, otherwise the since date.
 - 主题 (theme): the first configured keyword (case-insensitive) found in the task's title or body text; see below.
 
