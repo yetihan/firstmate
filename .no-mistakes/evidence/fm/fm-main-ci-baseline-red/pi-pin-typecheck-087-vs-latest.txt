@@ -1,0 +1,7 @@
+# tests/fm-pi-primary-types.test.sh - strict no-emit typecheck of tracked .pi/extensions against installed Pi
+## Against pinned 0.87.0:
+ok - tracked Pi extensions pass strict no-emit typecheck against Pi 0.87.0
+exit=0
+## Against unpinned latest 1.1.0 (typecheck itself still passes; breakage is in runtime/render consumers, see other transcripts):
+ok - tracked Pi extensions pass strict no-emit typecheck against Pi 1.1.0
+exit=0

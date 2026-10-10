@@ -1,0 +1,4 @@
+install-site: tests-portable-parallel-1 / Install the Pi package for the Pi extension tests -> npm install -g @earendil-works/pi-coding-agent@0.87.0
+install-site: tests-portable-serial / Install the Pi package for the Pi extension tests -> npm install -g @earendil-works/pi-coding-agent@0.87.0
+gated-lane-jobs: ['tests-portable-parallel-1', 'tests-portable-serial']
+SEMANTIC CHECK PASSED: both Pi install sites are exactly pinned to 0.87.0 and both gate their lanes
