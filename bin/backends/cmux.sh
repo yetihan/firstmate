@@ -325,20 +325,84 @@ fm_backend_cmux_scoped_title() {  # <fm-task-label>
   printf 'fm-%s-%s' "$home" "$rest"
 }
 
-# fm_backend_cmux_workspace_id_for_label: the live workspace id whose title
-# equals <label>, or empty. cmux enforces no title uniqueness (finding #6),
-# so this adopts the FIRST match `jq` returns, mirroring herdr's/zellij's own
-# duplicate-check posture.
+# fm_backend_cmux_workspaces: read every window without selecting or focusing
+# it. Buffer the complete inventory before emitting JSON; a failed/malformed
+# window read (including a window closing during the scan) must never turn a
+# partial inventory into proof of absence or title uniqueness.
+fm_backend_cmux_workspaces() {
+  local wins ids wid wss rows all='[]'
+  wins=$(fm_backend_cmux_cli list-windows --json --id-format uuids 2>/dev/null) || return 1
+  ids=$(printf '%s' "$wins" | jq -esc '
+    def uuid: type == "string" and test("^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$");
+    if length == 1 then .[0] else error("invalid window response") end
+    |
+    if type == "array" and all(.[]; .id | uuid)
+      and ([.[].id] | length == (unique | length))
+    then map(.id) else error("invalid window inventory") end
+  ' 2>/dev/null) || return 1
+  while IFS= read -r wid; do
+    [ -n "$wid" ] || continue
+    wss=$(fm_backend_cmux_cli workspace list --json --id-format uuids --window "$wid" 2>/dev/null) || return 1
+    rows=$(printf '%s' "$wss" | jq -esc --arg window "$wid" '
+      def uuid: type == "string" and test("^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$");
+      if length == 1 then .[0] else error("invalid workspace response") end
+      |
+      if (.workspaces | type) == "array"
+        and all(.workspaces[]; (.id | uuid) and (.title | type == "string"))
+      then [.workspaces[] | {id, title, window_id: $window}]
+      else error("invalid workspace inventory") end
+    ' 2>/dev/null) || return 1
+    all=$(printf '%s\n%s' "$all" "$rows" | jq -cs 'add') || return 1
+  done < <(printf '%s' "$ids" | jq -r '.[]')
+  # A workspace cannot belong to two windows in one coherent scan.
+  printf '%s' "$all" | jq -ec 'if (map(.id) | length == (unique | length)) then . else error("workspace moved during scan") end' 2>/dev/null
+}
+
+# fm_backend_cmux_workspace_matches: re-read the discovered window after pane
+# resolution, requiring both exact UUID membership and one exact title match.
+# No fallback to the current window on closure, rename, or an unreadable list.
+fm_backend_cmux_workspace_matches() {  # <window_id> <workspace_id> <title>
+  local wss
+  wss=$(fm_backend_cmux_cli workspace list --json --id-format uuids --window "$1" 2>/dev/null) || return 1
+  printf '%s' "$wss" | jq -es --arg id "$2" --arg title "$3" '
+    if length == 1 then .[0] else error("invalid workspace response") end
+    |
+    (.workspaces | type) == "array"
+    and ([.workspaces[] | select(.title == $title)] | length == 1)
+    and ([.workspaces[] | select(.id == $id)] | length == 1)
+    and any(.workspaces[]; .id == $id and .title == $title)
+  ' >/dev/null 2>&1
+}
+
+# fm_backend_cmux_workspace_id_for_label: the unique live workspace id whose
+# title equals <label>, or empty if absent. Duplicate titles across any window
+# and incomplete inventories refuse instead of adopting the first match.
 fm_backend_cmux_workspace_id_for_label() {  # <label>
-  local label=$1
-  fm_backend_cmux_cli workspace list --json --id-format uuids 2>/dev/null \
-    | jq -r --arg want "$label" '.workspaces[]? | select(.title == $want) | .id' 2>/dev/null | head -1
+  local label=$1 wss match wsid wid
+  wss=$(fm_backend_cmux_workspaces) || return 1
+  match=$(printf '%s' "$wss" | jq -er --arg want "$label" '
+    [.[] | select(.title == $want)]
+    | if length > 1 then error("ambiguous task title")
+      elif length == 1 then .[0] | [.id, .window_id] | @tsv
+      else "" end
+  ' 2>/dev/null) || return 1
+  [ -n "$match" ] || return 0
+  IFS=$'\t' read -r wsid wid <<< "$match"
+  fm_backend_cmux_workspace_matches "$wid" "$wsid" "$label" || return 1
+  printf '%s' "$wsid"
 }
 
 fm_backend_cmux_surface_id_for_workspace() {  # <workspace_id>
-  local wsid=$1
-  fm_backend_cmux_cli list-panes --workspace "$wsid" --json --id-format uuids 2>/dev/null \
-    | jq -r '.panes[0] // {} | .selected_surface_id // (.surface_ids[0] // empty)' 2>/dev/null
+  local wsid=$1 raw
+  raw=$(fm_backend_cmux_cli list-panes --workspace "$wsid" --json --id-format uuids 2>/dev/null) || return 1
+  printf '%s' "$raw" | jq -ers '
+    if length == 1 then .[0] else error("invalid pane response") end
+    |
+    .panes[0] as $pane | ($pane.selected_surface_id // $pane.surface_ids[0]) as $surface
+    | select($surface | type == "string" and test("^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$"))
+    | select($pane.surface_ids | type == "array" and index($surface) != null)
+    | $surface
+  ' 2>/dev/null
 }
 
 # fm_backend_cmux_create_task: create the task's workspace (one surface),
@@ -357,7 +421,10 @@ fm_backend_cmux_surface_id_for_workspace() {  # <workspace_id>
 fm_backend_cmux_create_task() {  # <label> <cwd>
   local label=$1 cwd=$2 title dup out wsid sfid
   title=$(fm_backend_cmux_scoped_title "$label")
-  dup=$(fm_backend_cmux_workspace_id_for_label "$title")
+  dup=$(fm_backend_cmux_workspace_id_for_label "$title") || {
+    echo "error: could not establish a unique cmux workspace inventory for '$title'; refusing creation" >&2
+    return 1
+  }
   if [ -n "$dup" ]; then
     echo "error: cmux workspace '$title' already exists" >&2
     return 1
@@ -412,9 +479,14 @@ fm_backend_cmux_parse_target() {  # <target>
 # (fm_backend_zellij_pane_exists) rather than the design sketch's original
 # read-screen-based suggestion.
 fm_backend_cmux_surface_exists() {  # <workspace_id> <surface_id>
-  local wsid=$1 sfid=$2
-  fm_backend_cmux_cli list-panes --workspace "$wsid" --json --id-format uuids 2>/dev/null \
-    | jq -e --arg s "$sfid" '[.panes[]? | select(.surface_ids // [] | index($s))] | length > 0' >/dev/null 2>&1
+  local wsid=$1 sfid=$2 raw
+  raw=$(fm_backend_cmux_cli list-panes --workspace "$wsid" --json --id-format uuids 2>/dev/null) || return 1
+  printf '%s' "$raw" | jq -es --arg s "$sfid" '
+    if length == 1 then .[0] else error("invalid pane response") end
+    |
+    (.panes | type) == "array"
+    and any(.panes[]; (.surface_ids | type) == "array" and (.surface_ids | index($s)) != null)
+  ' >/dev/null 2>&1
 }
 
 # fm_backend_cmux_target_ready: parse the target and verify it is live via
@@ -422,22 +494,25 @@ fm_backend_cmux_surface_exists() {  # <workspace_id> <surface_id>
 # header for the fresh-surface pitfall this avoids). When the caller knows
 # the owning firstmate task label, refresh stale workspace/surface ids by label.
 fm_backend_cmux_target_ready() {  # <target> [expected-label]
-  local expected_label=${2:-} expected_title title wsid sfid
+  local expected_label=${2:-} expected_title wsid sfid wss match wid
   fm_backend_cmux_parse_target "$1" || return 1
   if [ -n "$expected_label" ]; then
     expected_title=$(fm_backend_cmux_scoped_title "$expected_label")
-    title=$(fm_backend_cmux_cli workspace list --json --id-format uuids 2>/dev/null | jq -r --arg id "$FM_BACKEND_CMUX_WORKSPACE" '.workspaces[]? | select(.id == $id) | .title' 2>/dev/null)
-    if [ "$title" = "$expected_title" ]; then
-      fm_backend_cmux_surface_exists "$FM_BACKEND_CMUX_WORKSPACE" "$FM_BACKEND_CMUX_SURFACE" && return 0
-      wsid=$FM_BACKEND_CMUX_WORKSPACE
-    elif [ -n "$title" ]; then
-      return 1
+    wss=$(fm_backend_cmux_workspaces) || return 1
+    printf '%s' "$wss" | jq -e --arg id "$FM_BACKEND_CMUX_WORKSPACE" --arg want "$expected_title" \
+      'all(.[]; .id != $id or .title == $want)' >/dev/null 2>&1 || return 1
+    match=$(printf '%s' "$wss" | jq -er --arg want "$expected_title" '
+      [.[] | select(.title == $want)] | select(length == 1)
+      | .[0] | [.id, .window_id] | @tsv
+    ' 2>/dev/null) || return 1
+    IFS=$'\t' read -r wsid wid <<< "$match"
+    if [ "$wsid" = "$FM_BACKEND_CMUX_WORKSPACE" ] && fm_backend_cmux_surface_exists "$wsid" "$FM_BACKEND_CMUX_SURFACE"; then
+      sfid=$FM_BACKEND_CMUX_SURFACE
     else
-      wsid=$(fm_backend_cmux_workspace_id_for_label "$expected_title")
-      [ -n "$wsid" ] || return 1
+      sfid=$(fm_backend_cmux_surface_id_for_workspace "$wsid")
+      [ -n "$sfid" ] || return 1
     fi
-    sfid=$(fm_backend_cmux_surface_id_for_workspace "$wsid")
-    [ -n "$sfid" ] || return 1
+    fm_backend_cmux_workspace_matches "$wid" "$wsid" "$expected_title" || return 1
     FM_BACKEND_CMUX_WORKSPACE=$wsid
     FM_BACKEND_CMUX_SURFACE=$sfid
     return 0
@@ -650,18 +725,26 @@ fm_backend_cmux_kill() {  # <target> [unused] [expected-label]
 # whose title is scoped to this firstmate home, by TITLE - never by trusting a
 # stored uuid, since workspace ids do NOT survive an app relaunch (finding #5).
 # One "<workspace_id>:<surface_id>\t<fm-id>" line per live task workspace.
-# Read-only: an unreachable cmux simply lists nothing.
+# Read-only: an unreachable/incompletely readable cmux simply lists nothing.
+# Ambiguous titles are omitted, and each discovered UUID/title is revalidated
+# in its own window after surface resolution before publishing the task.
 fm_backend_cmux_list_live() {
-  local wss wsid title sfid home prefix plain
+  local wss wsid title sfid home prefix plain wid
   home=$(fm_backend_cmux_home_label)
   prefix="fm-$home-"
-  wss=$(fm_backend_cmux_cli workspace list --json --id-format uuids 2>/dev/null) || return 0
-  while IFS=$'\t' read -r wsid title; do
+  wss=$(fm_backend_cmux_workspaces) || return 0
+  while IFS=$'\t' read -r wsid title wid; do
     [ -n "$wsid" ] || continue
     plain=${title#"$prefix"}
     [ -n "$plain" ] || continue
     sfid=$(fm_backend_cmux_surface_id_for_workspace "$wsid")
     [ -n "$sfid" ] || continue
+    fm_backend_cmux_workspace_matches "$wid" "$wsid" "$title" || continue
     printf '%s:%s\tfm-%s\n' "$wsid" "$sfid" "$plain"
-  done < <(printf '%s' "$wss" | jq -r --arg prefix "$prefix" '.workspaces[]? | select(.title | startswith($prefix)) | "\(.id)\t\(.title)"' 2>/dev/null)
+  done < <(printf '%s' "$wss" | jq -r --arg prefix "$prefix" '
+    group_by(.title)[] | select(length == 1) | .[0]
+    | select(.title | startswith($prefix))
+    | select(.title[($prefix | length):] | test("^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$"))
+    | [.id, .title, .window_id] | @tsv
+  ' 2>/dev/null)
 }
