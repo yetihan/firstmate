@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+printf '%s\037' "$(date -u +%H:%M:%S.%3N)" >> "$CMUX_ARGV_LOG"
+for a in "$@"; do printf '%s\037' "$a" >> "$CMUX_ARGV_LOG"; done
+printf '\n' >> "$CMUX_ARGV_LOG"
+exec "/Applications/cmux.app/Contents/Resources/bin/cmux" "$@"

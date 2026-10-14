@@ -1,0 +1,29 @@
+== phase 1: list_live with no fm task for this home (read-only) ==
+list_live(no task) status=0 output=[]
+-- argv phase1:
+08:49:00.3N list-windows --json --id-format uuids 
+08:49:01.3N workspace list --json --id-format uuids --window B6487384-B70A-44A7-A2B1-5A028A7B11AF 
+
+== phase 2: create fm-test- task, then discover it twice ==
+create ids=[08B3F7B4-FADF-49FC-8686-F19FCA4618DE 2891E7A6-3023-4DAD-BB7D-CEBCE2D2945C]
+list_live run1=[08B3F7B4-FADF-49FC-8686-F19FCA4618DE:2891E7A6-3023-4DAD-BB7D-CEBCE2D2945C	fm-test-live1]
+list_live run2=[08B3F7B4-FADF-49FC-8686-F19FCA4618DE:2891E7A6-3023-4DAD-BB7D-CEBCE2D2945C	fm-test-live1]
+-- argv discovery-phase (after create):
+08:49:02.3N list-windows --json --id-format uuids 
+08:49:02.3N workspace list --json --id-format uuids --window B6487384-B70A-44A7-A2B1-5A028A7B11AF 
+08:49:02.3N list-panes --workspace 08B3F7B4-FADF-49FC-8686-F19FCA4618DE --json --id-format uuids 
+08:49:02.3N workspace list --json --id-format uuids --window B6487384-B70A-44A7-A2B1-5A028A7B11AF 
+08:49:02.3N list-windows --json --id-format uuids 
+08:49:03.3N workspace list --json --id-format uuids --window B6487384-B70A-44A7-A2B1-5A028A7B11AF 
+08:49:03.3N list-panes --workspace 08B3F7B4-FADF-49FC-8686-F19FCA4618DE --json --id-format uuids 
+08:49:03.3N workspace list --json --id-format uuids --window B6487384-B70A-44A7-A2B1-5A028A7B11AF 
+
+== audits ==
+AUDIT PASS: discovery issued only read-only verbs (no focus, no mutation)
+AUDIT PASS: repeated discovery returned identical bindings
+AUDIT PASS: discovered the fm-test-live1 task by scoped title
+AUDIT PASS: window B6487384-B70A-44A7-A2B1-5A028A7B11AF was explicitly queried with --window
+AUDIT PASS: no focus verb
+
+== cleanup ==
+closed

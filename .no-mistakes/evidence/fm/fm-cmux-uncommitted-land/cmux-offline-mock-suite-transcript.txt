@@ -1,0 +1,76 @@
+FM_TEST_BEGIN 2026-10-14T08:41:18Z tests/fm-backend-cmux.test.sh family=cmux expected_gate_skip=optional-binary
+ok - fm_backend_cmux_version_check: accepts the verified minimum (0.64.17)
+ok - fm_backend_cmux_version_check: accepts a newer version (0.70.0)
+ok - fm_backend_cmux_version_check: refuses an old version loudly
+ok - fm_backend_cmux_version_check: refuses loudly when cmux is not found on PATH or at the bundle path
+ok - fm_backend_cmux_password: reads the first non-empty line of config/cmux-socket-password
+ok - fm_backend_cmux_password: preserves spaces and tabs in config/cmux-socket-password
+ok - fm_backend_cmux_password: respects FM_CONFIG_OVERRIDE
+ok - fm_backend_cmux_password: empty when config/cmux-socket-password is absent
+ok - fm_backend_cmux_cli: exports CMUX_SOCKET_PASSWORD when config/cmux-socket-password is set
+ok - fm_backend_cmux_parse_target: splits '<workspace_uuid>:<surface_uuid>' on the first colon
+ok - fm_backend_cmux_normalize_key: Enter/Escape/C-c map to cmux's verified enter/escape/ctrl-c
+ok - fm_backend_cmux_scoped_title: scopes a primary task title with firstmate plus root hash
+ok - fm_backend_cmux_scoped_title: scopes a secondmate task title with the home marker plus root hash
+ok - fm_backend_cmux_scoped_title: includes the resolved FM_ROOT hash in the home label
+ok - fm_backend_validate: cmux is a known backend
+ok - fm_backend_busy_state: cmux (no native primitive) always reports unknown, same as tmux/zellij/orca
+ok - fm_backend_composer_state: routes cmux to the cmux composer classifier
+ok - fm_backend_cmux_ping_state: reports 'ok' on PONG
+ok - fm_backend_cmux_ping_state: reports 'denied' when socketControlMode=cmuxOnly rejects the connection
+ok - fm_backend_cmux_ping_state: reports 'unauth' when password mode rejects a missing/wrong password
+ok - fm_backend_cmux_ping_state: reports 'unauth' when password mode rejects a wrong password (Invalid password)
+ok - fm_backend_cmux_ping_state: reports 'down' when the app is not running yet
+ok - fm_backend_cmux_ensure_running: returns immediately when cmux is already reachable
+ok - fm_backend_cmux_ensure_running: fails fast on a denied socket without attempting to launch, naming every viable mode
+ok - fm_backend_cmux_ensure_running: fails fast on an unauthenticated socket, naming the password config and the Automation mode alternative
+ok - fm_backend_cmux_create_task: refuses a duplicate workspace title (cmux's own new-workspace has no uniqueness check)
+ok - fm_backend_cmux_create_task: creates a workspace and parses workspace_id/surface_id from list responses
+ok - fm_backend_cmux_target_ready: fails when the workspace/surface is not found (list-panes structural check)
+ok - fm_backend_cmux_target_ready: verifies the workspace title against the expected label first
+ok - fm_backend_cmux_target_ready: rejects a workspace id reused under a different title
+ok - fm_backend_cmux_capture: fetches generously and trims to N lines locally
+ok - fm_backend_cmux_capture: propagates a read-screen failure even when stdout is empty
+ok - fm_backend_cmux_capture: fails when the target surface is absent
+ok - fm_backend_cmux_send_key: normalizes the key (Escape -> escape) and targets the explicit workspace/surface
+ok - fm_backend_cmux_send_key: recovers stale workspace/surface ids by expected label
+ok - fm_backend_cmux_send_literal: calls send with an explicit workspace/surface and a -- separator
+ok - fm_backend_cmux_send_text_line: clears partial input when Enter fails
+ok - fm_backend_cmux_send_text_line: reports unsafe input when cleanup also fails
+ok - fm_backend_cmux_current_path: actively probes with marked begin/end lines (zellij-shape frozen cwd)
+ok - fm_backend_cmux_composer_state: a bare '❯' composer row reads empty
+ok - fm_backend_cmux_composer_state: a borderless Claude '❯' composer row reads empty
+ok - fm_backend_cmux_composer_state: a borderless Claude row outranks stale bordered scrollback
+ok - fm_backend_cmux_composer_state: a borderless Claude '❯'+NBSP composer row reads empty under LC_ALL=C
+ok - fm_backend_cmux_composer_state: plain-capture text after a bare glyph degrades to unknown (never false pending)
+ok - fm_backend_cmux_composer_state: the ghost placeholder text reads empty, not pending
+ok - fm_backend_cmux_composer_state: real composer text reads pending
+ok - fm_backend_cmux_composer_state: a slash-command popup's argument-hint placeholder still reads pending (the incident fix)
+ok - fm_backend_cmux_composer_state: reports unknown when the surface cannot be captured
+ok - fm_backend_cmux_composer_state: reports unknown when no border-delimited composer row is found
+ok - fm_backend_cmux_send_text_submit: reports 'empty' once the composer row reads empty after one Enter
+ok - fm_backend_cmux_send_text_submit: reports 'pending' when the composer never clears after retried Enters (swallowed)
+ok - fm_backend_cmux_send_text_submit: retries past a popup-placeholder-fill Enter and lands the real second Enter (the incident fix)
+ok - fm_backend_cmux_send_text_submit: reports 'send-failed' when the target workspace/surface is absent
+ok - fm_backend_cmux_window_of_workspace: walks windows and counts the membership-confirming workspace list
+ok - fm_backend_cmux_window_of_workspace: echoes nothing when no window holds the workspace
+ok - fm_backend_cmux_kill: closes the task workspace directly when it is not the last in its window
+ok - fm_backend_cmux_kill: adds a throwaway sibling then closes the target when it is the last workspace in its window
+ok - fm_backend_cmux_kill: never fails even when close-workspace fails
+ok - fm_backend_cmux_kill: recovers stale workspace/surface ids by expected label
+ok - fm_backend_cmux_list_live: lists only this home's scoped task workspaces using plain fm-<id> labels
+ok - fm_backend_cmux_list_live: discovers another window repeatedly with exact home ownership and read-only queries
+ok - fm_backend_cmux_target_ready: recovers a stale target by unique scoped label in another window
+ok - fm_backend_cmux_target_ready: refuses a conflicting original UUID even when the expected task exists elsewhere
+ok - cmux cross-window recovery: duplicate titles refuse lookup/readiness and are omitted from discovery
+ok - fm_backend_cmux_create_task: refuses a non-current-window duplicate or unreadable inventory before creation
+ok - fm_backend_cmux_list_live: unreadable, malformed, empty or closing listed windows never publish partial tasks
+ok - cmux inventory: malformed window/workspace IDs and duplicate moving membership are rejected
+ok - cmux recovery: scoped revalidation rejects window closure, title rename, UUID replacement and newly duplicated title
+ok - fm_backend_cmux_list_live: ignores malformed task titles and invalid, nonmember or vanished surfaces
+ok - fm_backend_cmux_list_live: a readable empty window inventory returns no tasks successfully
+ok - fm-spawn.sh: refuses backend=cmux for --secondmate spawns (mirrors Orca's refusal; no secondmate launch design exists yet)
+FM_TEST_END 2026-10-14T08:41:46Z tests/fm-backend-cmux.test.sh exit=0 duration_ms=28066 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=28154
+FM_TEST_SUMMARY_FAMILY family=cmux count=1 duration_ms=28066 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-backend-cmux.test.sh duration_ms=28066
