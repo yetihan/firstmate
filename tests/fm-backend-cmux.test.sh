@@ -16,6 +16,10 @@ set -u
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found (required by the cmux adapter)"; exit 0; }
 
 TMP_ROOT=$(fm_test_tmproot fm-backend-cmux-tests)
+export FM_CONFIG_OVERRIDE="$TMP_ROOT/empty-config"
+export FM_HOME="$TMP_ROOT/empty-home"
+mkdir -p "$FM_CONFIG_OVERRIDE" "$FM_HOME"
+unset CMUX_SOCKET_PASSWORD
 
 # make_cmux_fakebin: a `cmux` stub that logs every invocation (one line,
 # unit-separated args, to $FM_CMUX_LOG) and returns the canned response for
@@ -28,6 +32,8 @@ TMP_ROOT=$(fm_test_tmproot fm-backend-cmux-tests)
 # queue) since fm_backend_cmux_version_check/fm_backend_cmux_ping_state are
 # called at points a test may not want to hand-count, exactly mirroring
 # zellij's --version/list-sessions special-casing.
+# FM_CMUX_MOCK_INVENTORY=1 instead requires exact read-only query argv and
+# reads per-window/pane fixtures, with numbered overrides for changing reads.
 make_cmux_fakebin() {  # <dir> -> echoes fakebin dir
   local dir=$1 fb="$1/fakebin"
   mkdir -p "$fb"
@@ -50,6 +56,37 @@ fi
 if [ "${1:-}" = ping ]; then
   printf '%s\n' "${FM_CMUX_FAKE_PING:-PONG}"
   exit "${FM_CMUX_FAKE_PING_EXIT:-0}"
+fi
+
+if [ "${FM_CMUX_MOCK_INVENTORY:-0}" = 1 ]; then
+  case "${1:-}" in
+    list-windows)
+      [ "$#" -eq 4 ] && [ "$2" = --json ] && [ "$3" = --id-format ] && [ "$4" = uuids ] || exit 95
+      fixture="$RESP/windows"
+      ;;
+    workspace)
+      [ "$#" -eq 7 ] && [ "$2" = list ] && [ "$3" = --json ] && [ "$4" = --id-format ] && [ "$5" = uuids ] && [ "$6" = --window ] || exit 95
+      fixture="$RESP/window-$7"
+      ;;
+    list-panes)
+      [ "$#" -eq 6 ] && [ "$2" = --workspace ] && [ "$4" = --json ] && [ "$5" = --id-format ] && [ "$6" = uuids ] || exit 95
+      fixture="$RESP/panes-$3"
+      ;;
+    *) exit 95 ;;
+  esac
+  next=$(( $(cat "$fixture.count" 2>/dev/null || echo 0) + 1 ))
+  printf '%s\n' "$next" > "$fixture.count"
+  if [ -f "$fixture.$next.exit" ]; then
+    exit "$(cat "$fixture.$next.exit")"
+  fi
+  if [ -f "$fixture.$next.out" ]; then
+    cat "$fixture.$next.out"
+  elif [ -f "$fixture.out" ]; then
+    cat "$fixture.out"
+  else
+    exit 96
+  fi
+  exit 0
 fi
 
 next=$(( $(cat "$COUNT_FILE" 2>/dev/null || echo 0) + 1 ))
@@ -103,6 +140,48 @@ cmux_panes_empty_response() {  # <dir> <n>
 
 cmux_read_screen_response() {  # <dir> <n> <text>
   jq -n --arg t "$3" '{text:$t}' > "$1/responses/$2.out"
+}
+
+cmux_single_window_snapshot_response() {  # <dir> <n> [<id> <title> ...]
+  local dir=$1 n=$2
+  shift 2
+  cmux_windows_response "$dir" "$n" "eeeeeeee-0000-0000-0000-000000000000" "$(( $# / 2 ))"
+  cmux_workspace_list_response "$dir" "$((n + 1))" "$@"
+}
+
+cmux_inventory_windows() {  # <dir> <window-id> ...
+  local dir=$1
+  shift
+  jq -cn --args '$ARGS.positional | map({id:., workspace_count:1})' "$@" > "$dir/responses/windows.out"
+}
+
+cmux_inventory_workspaces() {  # <dir> <window-id> [<id> <title> ...]
+  local dir=$1 wid=$2
+  shift 2
+  jq -cn --args '$ARGS.positional | [range(0;length;2) as $i | {id:.[$i],title:.[$i+1]}] | {workspaces:.}' "$@" > "$dir/responses/window-$wid.out"
+}
+
+cmux_inventory_panes() {  # <dir> <workspace-id> <surface-id>
+  jq -cn --arg s "$3" '{panes:[{selected_surface_id:$s,surface_ids:[$s]}]}' > "$1/responses/panes-$2.out"
+}
+
+cmux_inventory_run() {  # <dir> <shell-code>
+  local dir=$1 fb
+  fb=$(make_cmux_fakebin "$dir")
+  PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" FM_CMUX_MOCK_INVENTORY=1 \
+    bash -c "$2" "$ROOT"
+}
+
+cmux_assert_queries_only() {  # <log>
+  local command subcommand
+  while IFS=$'\x1f' read -r _ command subcommand _; do
+    case "$command" in
+      list-windows|list-panes) ;;
+      workspace) [ "$subcommand" = list ] || fail "inventory unexpectedly invoked workspace '$subcommand'" ;;
+      *) fail "inventory unexpectedly invoked mutating/focus command '$command'" ;;
+    esac
+  done < "$1"
+  assert_not_contains "$(cat "$1")" $'\x1f''--focus' "read-only discovery must not request focus changes"
 }
 
 cmux_expected_root_hash() {  # <root>
@@ -209,7 +288,7 @@ test_password_reads_from_config_file() {
   local dir out
   dir="$TMP_ROOT/password-file"; mkdir -p "$dir/config"
   printf 'sekret-pw\n' > "$dir/config/cmux-socket-password"
-  out=$( FM_HOME="$dir" bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_password' "$ROOT" )
+  out=$( FM_HOME="$dir" FM_CONFIG_OVERRIDE='' bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_password' "$ROOT" )
   [ "$out" = "sekret-pw" ] || fail "password should be read from config/cmux-socket-password, got '$out'"
   pass "fm_backend_cmux_password: reads the first non-empty line of config/cmux-socket-password"
 }
@@ -218,7 +297,7 @@ test_password_preserves_config_file_whitespace() {
   local dir out
   dir="$TMP_ROOT/password-file-whitespace"; mkdir -p "$dir/config"
   printf '\nsek ret\t pw  \n' > "$dir/config/cmux-socket-password"
-  out=$( FM_HOME="$dir" bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_password' "$ROOT" )
+  out=$( FM_HOME="$dir" FM_CONFIG_OVERRIDE='' bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_password' "$ROOT" )
   [ "$out" = $'sek ret\t pw  ' ] || fail "password should preserve spaces and tabs from config/cmux-socket-password, got '$out'"
   pass "fm_backend_cmux_password: preserves spaces and tabs in config/cmux-socket-password"
 }
@@ -237,7 +316,7 @@ test_password_respects_config_override() {
 test_password_empty_when_config_absent() {
   local dir out
   dir="$TMP_ROOT/password-absent"; mkdir -p "$dir/config"
-  out=$( FM_HOME="$dir" bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_password' "$ROOT" )
+  out=$( FM_HOME="$dir" FM_CONFIG_OVERRIDE='' bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_password' "$ROOT" )
   [ -z "$out" ] || fail "password should be empty when config/cmux-socket-password is absent, got '$out'"
   pass "fm_backend_cmux_password: empty when config/cmux-socket-password is absent"
 }
@@ -247,7 +326,7 @@ test_cli_exports_password_only_when_configured() {
   dir="$TMP_ROOT/password-export"; mkdir -p "$dir/config" "$dir/responses"
   printf 'sekret-pw\n' > "$dir/config/cmux-socket-password"
   fb=$(make_cmux_fakebin "$dir")
-  PATH="$fb:$PATH" FM_HOME="$dir" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+  PATH="$fb:$PATH" FM_HOME="$dir" FM_CONFIG_OVERRIDE='' FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_cli ping' "$ROOT" >/dev/null
   assert_contains "$(cat "$dir/log")" "CMUX_SOCKET_PASSWORD=sekret-pw" \
     "fm_backend_cmux_cli did not export the configured password"
@@ -463,7 +542,8 @@ test_create_task_refuses_duplicate_label() {
   local dir fb out status title
   dir="$TMP_ROOT/dup-task"; mkdir -p "$dir/responses"
   title=$(cmux_expected_scoped_title fm-dup1)
-  cmux_workspace_list_response "$dir" 1 "aaaaaaaa-0000-0000-0000-000000000000" "$title"
+  cmux_single_window_snapshot_response "$dir" 1 "aaaaaaaa-0000-0000-0000-000000000000" "$title"
+  cmux_workspace_list_response "$dir" 3 "aaaaaaaa-0000-0000-0000-000000000000" "$title"
   fb=$(make_cmux_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-dup1 /tmp/proj' "$ROOT" 2>&1 )
@@ -477,13 +557,14 @@ test_create_task_creates_and_parses_ids() {
   local dir fb out title
   dir="$TMP_ROOT/create-task"; mkdir -p "$dir/responses"
   title=$(cmux_expected_scoped_title fm-newtask)
-  # 1: workspace list --json (pre-create duplicate check) -> no match
-  printf '{"workspaces":[]}' > "$dir/responses/1.out"
-  # 2: new-workspace (silent on success)
-  # 3: workspace list --json (post-create id resolution) -> match
-  cmux_workspace_list_response "$dir" 3 "bbbbbbbb-1111-1111-1111-111111111111" "$title"
-  # 4: list-panes --json --id-format uuids -> default surface id
-  cmux_panes_response "$dir" 4 "cccccccc-2222-2222-2222-222222222222"
+  # 1-2: all-window duplicate check -> no match.
+  cmux_single_window_snapshot_response "$dir" 1
+  # 3: new-workspace (silent on success).
+  # 4-6: all-window id resolution and scoped identity re-read.
+  cmux_single_window_snapshot_response "$dir" 4 "bbbbbbbb-1111-1111-1111-111111111111" "$title"
+  cmux_workspace_list_response "$dir" 6 "bbbbbbbb-1111-1111-1111-111111111111" "$title"
+  # 7: list-panes -> default surface id.
+  cmux_panes_response "$dir" 7 "cccccccc-2222-2222-2222-222222222222"
   fb=$(make_cmux_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-newtask /tmp/proj' "$ROOT" )
@@ -515,9 +596,10 @@ test_target_ready_checks_expected_label() {
   local dir fb title
   dir="$TMP_ROOT/ready-label-ok"; mkdir -p "$dir/responses"
   title=$(cmux_expected_scoped_title fm-label)
-  cmux_workspace_list_response "$dir" 1 "aaaaaaaa-0000-0000-0000-000000000000" "$title"
-  # 2: list-panes --json --id-format uuids -> matching surface
-  cmux_panes_response "$dir" 2 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_single_window_snapshot_response "$dir" 1 "aaaaaaaa-0000-0000-0000-000000000000" "$title"
+  # 3: list-panes -> matching surface; 4: scoped identity re-read.
+  cmux_panes_response "$dir" 3 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_workspace_list_response "$dir" 4 "aaaaaaaa-0000-0000-0000-000000000000" "$title"
   fb=$(make_cmux_fakebin "$dir")
   PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_target_ready "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" fm-label' "$ROOT"
@@ -530,7 +612,7 @@ test_target_ready_checks_expected_label() {
 test_target_ready_rejects_label_mismatch() {
   local dir fb status
   dir="$TMP_ROOT/ready-label-mismatch"; mkdir -p "$dir/responses"
-  cmux_workspace_list_response "$dir" 1 "aaaaaaaa-0000-0000-0000-000000000000" "not-the-task"
+  cmux_single_window_snapshot_response "$dir" 1 "aaaaaaaa-0000-0000-0000-000000000000" "not-the-task"
   fb=$(make_cmux_fakebin "$dir")
   PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_target_ready "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" fm-label' "$ROOT"
@@ -609,9 +691,9 @@ test_send_key_recovers_stale_target_by_label() {
   local dir fb title
   dir="$TMP_ROOT/sendkey-stale-target"; mkdir -p "$dir/responses"
   title=$(cmux_expected_scoped_title fm-label)
-  cmux_workspace_list_response "$dir" 1 "cccccccc-2222-2222-2222-222222222222" "$title"
-  cmux_workspace_list_response "$dir" 2 "cccccccc-2222-2222-2222-222222222222" "$title"
+  cmux_single_window_snapshot_response "$dir" 1 "cccccccc-2222-2222-2222-222222222222" "$title"
   cmux_panes_response "$dir" 3 "dddddddd-3333-3333-3333-333333333333"
+  cmux_workspace_list_response "$dir" 4 "cccccccc-2222-2222-2222-222222222222" "$title"
   fb=$(make_cmux_fakebin "$dir")
   PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_send_key "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" Enter fm-label' "$ROOT"
@@ -1042,14 +1124,13 @@ test_kill_recovers_stale_target_by_label() {
   local dir fb title
   dir="$TMP_ROOT/kill-stale-target"; mkdir -p "$dir/responses"
   title=$(cmux_expected_scoped_title fm-label)
-  # target_ready label recovery: 1 workspace list (title lookup, misses stale id),
-  # 2 workspace list (id-for-label -> refreshed id), 3 list-panes (surface id).
-  cmux_workspace_list_response "$dir" 1 "cccccccc-2222-2222-2222-222222222222" "$title"
-  cmux_workspace_list_response "$dir" 2 "cccccccc-2222-2222-2222-222222222222" "$title"
+  # 1-2: all-window inventory; 3: surface; 4: scoped identity re-read.
+  cmux_single_window_snapshot_response "$dir" 1 "cccccccc-2222-2222-2222-222222222222" "$title"
   cmux_panes_response "$dir" 3 "dddddddd-3333-3333-3333-333333333333"
-  # window_of_workspace on the REFRESHED id: 4 list-windows (not last), 5 workspace list --window.
-  cmux_windows_response "$dir" 4 "eeeeeeee-0000-0000-0000-000000000000" 2
-  cmux_workspace_list_response "$dir" 5 "cccccccc-2222-2222-2222-222222222222" "$title" "ffffffff-0000-0000-0000-000000000000" "other"
+  cmux_workspace_list_response "$dir" 4 "cccccccc-2222-2222-2222-222222222222" "$title"
+  # 5-6: window_of_workspace on the refreshed id.
+  cmux_windows_response "$dir" 5 "eeeeeeee-0000-0000-0000-000000000000" 2
+  cmux_workspace_list_response "$dir" 6 "cccccccc-2222-2222-2222-222222222222" "$title" "ffffffff-0000-0000-0000-000000000000" "other"
   fb=$(make_cmux_fakebin "$dir")
   PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_kill "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" "" fm-label' "$ROOT"
@@ -1071,19 +1152,267 @@ test_list_live_filters_by_title_prefix() {
   other_root="$dir/other-root"; mkdir -p "$other_root"
   title=$(cmux_expected_scoped_title fm-task1)
   other_title=$(cmux_expected_scoped_title fm-task2 "$ROOT" "$other_root")
-  # 1: workspace list --json --id-format uuids -> one in-home task, two unrelated
-  cmux_workspace_list_response "$dir" 1 \
+  # 1-2: all-window inventory -> one in-home task, two unrelated.
+  cmux_single_window_snapshot_response "$dir" 1 \
     "aaaaaaaa-0000-0000-0000-000000000000" "$title" \
     "dddddddd-8888-8888-8888-888888888888" "$other_title" \
     "cccccccc-9999-9999-9999-999999999999" "zsh"
-  # 2: list-panes for this home's task1 workspace
-  cmux_panes_response "$dir" 2 "bbbbbbbb-1111-1111-1111-111111111111"
+  # 3: task1 surface; 4: scoped identity re-read.
+  cmux_panes_response "$dir" 3 "bbbbbbbb-1111-1111-1111-111111111111"
+  cmux_workspace_list_response "$dir" 4 "aaaaaaaa-0000-0000-0000-000000000000" "$title"
   fb=$(make_cmux_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_list_live' "$ROOT" )
   [ "$out" = $'aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111\tfm-task1' ] \
     || fail "list_live should list only the in-home task workspace with its plain label and surface id, got '$out'"
   pass "fm_backend_cmux_list_live: lists only this home's scoped task workspaces using plain fm-<id> labels"
+}
+
+# --- cross-window recovery: exact ownership, ambiguity and changing windows ---
+
+# shellcheck disable=SC2016 # The quoted snippets execute in the runner's child bash.
+test_list_live_discovers_other_window_without_focus_and_repeats() {
+  local dir out again title foreign_root foreign_title
+  dir="$TMP_ROOT/inventory-other-window"; mkdir -p "$dir/responses" "$dir/foreign-root"
+  title=$(cmux_expected_scoped_title fm-cross1)
+  foreign_root="$dir/foreign-root"
+  foreign_title=$(cmux_expected_scoped_title fm-cross1 "$ROOT" "$foreign_root")
+  cmux_inventory_windows "$dir" "e1111111-0000-0000-0000-000000000000" "e2222222-0000-0000-0000-000000000000"
+  cmux_inventory_workspaces "$dir" "e1111111-0000-0000-0000-000000000000" \
+    "cccccccc-0000-0000-0000-000000000000" "$foreign_title" \
+    "dddddddd-0000-0000-0000-000000000000" zsh
+  cmux_inventory_workspaces "$dir" "e2222222-0000-0000-0000-000000000000" "aaaaaaaa-0000-0000-0000-000000000000" "$title"
+  cmux_inventory_panes "$dir" "aaaaaaaa-0000-0000-0000-000000000000" "bbbbbbbb-0000-0000-0000-000000000000"
+  out=$(cmux_inventory_run "$dir" '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_list_live')
+  [ "$out" = $'aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-0000-0000-0000-000000000000\tfm-cross1' ] \
+    || fail "list_live should discover the home-owned task in the other window, got '$out'"
+  again=$(cmux_inventory_run "$dir" '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_list_live')
+  [ "$again" = "$out" ] || fail "repeated cross-window discovery should return the same task binding"
+  assert_contains "$(cat "$dir/log")" $'\x1f''workspace'$'\x1f''list'$'\x1f''--json'$'\x1f''--id-format'$'\x1f''uuids'$'\x1f''--window'$'\x1f''e1111111-0000-0000-0000-000000000000' \
+    "discovery did not explicitly query the first window"
+  assert_contains "$(cat "$dir/log")" $'\x1f''workspace'$'\x1f''list'$'\x1f''--json'$'\x1f''--id-format'$'\x1f''uuids'$'\x1f''--window'$'\x1f''e2222222-0000-0000-0000-000000000000' \
+    "discovery did not explicitly query the other window"
+  assert_not_contains "$(cat "$dir/log")" $'\x1f''list-panes'$'\x1f''--workspace'$'\x1f''cccccccc-0000-0000-0000-000000000000' \
+    "discovery should not inspect another home's same task label"
+  cmux_assert_queries_only "$dir/log"
+  pass "fm_backend_cmux_list_live: discovers another window repeatedly with exact home ownership and read-only queries"
+}
+
+# shellcheck disable=SC2016 # The quoted snippets execute in the runner's child bash.
+test_label_lookup_and_target_ready_recover_other_window() {
+  local dir title out
+  dir="$TMP_ROOT/inventory-label-other-window"; mkdir -p "$dir/responses"
+  title=$(cmux_expected_scoped_title fm-cross1)
+  cmux_inventory_windows "$dir" "e1111111-0000-0000-0000-000000000000" "e2222222-0000-0000-0000-000000000000"
+  cmux_inventory_workspaces "$dir" "e1111111-0000-0000-0000-000000000000" "ffffffff-0000-0000-0000-000000000000" unrelated
+  cmux_inventory_workspaces "$dir" "e2222222-0000-0000-0000-000000000000" "cccccccc-0000-0000-0000-000000000000" "$title"
+  cmux_inventory_panes "$dir" "cccccccc-0000-0000-0000-000000000000" "dddddddd-0000-0000-0000-000000000000"
+  out=$(FM_CMUX_TITLE="$title" cmux_inventory_run "$dir" '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_workspace_id_for_label "$FM_CMUX_TITLE"')
+  [ "$out" = cccccccc-0000-0000-0000-000000000000 ] || fail "label lookup should resolve the unique task in another window"
+  out=$(cmux_inventory_run "$dir" '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_target_ready "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-0000-0000-0000-000000000000" fm-cross1 || exit 1; printf "%s:%s" "$FM_BACKEND_CMUX_WORKSPACE" "$FM_BACKEND_CMUX_SURFACE"')
+  [ "$out" = cccccccc-0000-0000-0000-000000000000:dddddddd-0000-0000-0000-000000000000 ] \
+    || fail "target_ready should recover both stale ids from the other window, got '$out'"
+  cmux_assert_queries_only "$dir/log"
+  pass "fm_backend_cmux_target_ready: recovers a stale target by unique scoped label in another window"
+}
+
+# shellcheck disable=SC2016 # The quoted snippets execute in the runner's child bash.
+test_target_ready_rejects_reused_uuid_even_when_label_elsewhere() {
+  local dir title status existing_title
+  title=$(cmux_expected_scoped_title fm-cross1)
+  for existing_title in wrong-task ''; do
+    dir="$TMP_ROOT/inventory-reused-uuid-${existing_title:-empty}"; mkdir -p "$dir/responses"
+    cmux_inventory_windows "$dir" "e1111111-0000-0000-0000-000000000000" "e2222222-0000-0000-0000-000000000000"
+    cmux_inventory_workspaces "$dir" "e1111111-0000-0000-0000-000000000000" "aaaaaaaa-0000-0000-0000-000000000000" "$existing_title"
+    cmux_inventory_workspaces "$dir" "e2222222-0000-0000-0000-000000000000" "cccccccc-0000-0000-0000-000000000000" "$title"
+    cmux_inventory_run "$dir" '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_target_ready "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-0000-0000-0000-000000000000" fm-cross1'
+    status=$?
+    [ "$status" -ne 0 ] || fail "target_ready should refuse a reused UUID rather than adopt another matching title"
+    assert_not_contains "$(cat "$dir/log")" $'\x1f''list-panes' "a reused UUID must refuse before inspecting surfaces"
+    cmux_assert_queries_only "$dir/log"
+  done
+  pass "fm_backend_cmux_target_ready: refuses a conflicting original UUID even when the expected task exists elsewhere"
+}
+
+# shellcheck disable=SC2016 # The quoted snippets execute in the runner's child bash.
+test_cross_window_duplicate_labels_are_not_claimed() {
+  local dir title unique_title out status
+  dir="$TMP_ROOT/inventory-duplicate-labels"; mkdir -p "$dir/responses"
+  title=$(cmux_expected_scoped_title fm-cross1)
+  unique_title=$(cmux_expected_scoped_title fm-unique1)
+  cmux_inventory_windows "$dir" "e1111111-0000-0000-0000-000000000000" "e2222222-0000-0000-0000-000000000000"
+  cmux_inventory_workspaces "$dir" "e1111111-0000-0000-0000-000000000000" "aaaaaaaa-0000-0000-0000-000000000000" "$title"
+  cmux_inventory_workspaces "$dir" "e2222222-0000-0000-0000-000000000000" \
+    "cccccccc-0000-0000-0000-000000000000" "$title" "eeeeeeee-0000-0000-0000-000000000000" "$unique_title"
+  cmux_inventory_panes "$dir" "eeeeeeee-0000-0000-0000-000000000000" "ffffffff-0000-0000-0000-000000000000"
+  out=$(FM_CMUX_TITLE="$title" cmux_inventory_run "$dir" '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_workspace_id_for_label "$FM_CMUX_TITLE"')
+  status=$?
+  [ "$status" -ne 0 ] && [ -z "$out" ] || fail "duplicate-title lookup should refuse without returning an arbitrary UUID"
+  cmux_inventory_run "$dir" '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_target_ready "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-0000-0000-0000-000000000000" fm-cross1'
+  status=$?
+  [ "$status" -ne 0 ] || fail "target_ready should refuse duplicate titles even when the original UUID is listed"
+  out=$(cmux_inventory_run "$dir" '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_list_live')
+  [ "$out" = $'eeeeeeee-0000-0000-0000-000000000000:ffffffff-0000-0000-0000-000000000000\tfm-unique1' ] \
+    || fail "discovery should omit both duplicate tasks while retaining an unrelated unique task, got '$out'"
+  assert_not_contains "$(cat "$dir/log")" $'\x1f''list-panes'$'\x1f''--workspace'$'\x1f''aaaaaaaa-0000-0000-0000-000000000000' \
+    "duplicate tasks should not be queried for surfaces"
+  cmux_assert_queries_only "$dir/log"
+  pass "cmux cross-window recovery: duplicate titles refuse lookup/readiness and are omitted from discovery"
+}
+
+# shellcheck disable=SC2016 # The quoted snippets execute in the runner's child bash.
+test_create_refuses_cross_window_duplicate_and_incomplete_inventory() {
+  local kind dir title out status
+  title=$(cmux_expected_scoped_title fm-cross1)
+  for kind in duplicate unreadable; do
+    dir="$TMP_ROOT/inventory-create-$kind"; mkdir -p "$dir/responses"
+    cmux_inventory_windows "$dir" "e1111111-0000-0000-0000-000000000000" "e2222222-0000-0000-0000-000000000000"
+    cmux_inventory_workspaces "$dir" "e1111111-0000-0000-0000-000000000000"
+    if [ "$kind" = duplicate ]; then
+      cmux_inventory_workspaces "$dir" "e2222222-0000-0000-0000-000000000000" "aaaaaaaa-0000-0000-0000-000000000000" "$title"
+    else
+      printf '1\n' > "$dir/responses/window-e2222222-0000-0000-0000-000000000000.1.exit"
+    fi
+    out=$(cmux_inventory_run "$dir" '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_create_task fm-cross1 /tmp/proj' 2>&1)
+    status=$?
+    [ "$status" -ne 0 ] || fail "create_task should refuse $kind cross-window inventory"
+    assert_contains "$out" error "create refusal should explain the inventory/duplicate problem"
+    cmux_assert_queries_only "$dir/log"
+  done
+  pass "fm_backend_cmux_create_task: refuses a non-current-window duplicate or unreadable inventory before creation"
+}
+
+# shellcheck disable=SC2016 # The quoted snippets execute in the runner's child bash.
+test_incomplete_inventory_never_publishes_partial_tasks() {
+  local kind dir title out status
+  title=$(cmux_expected_scoped_title fm-cross1)
+  for kind in unreadable malformed empty closed multiple-json-window multiple-json-workspace; do
+    dir="$TMP_ROOT/inventory-partial-$kind"; mkdir -p "$dir/responses"
+    cmux_inventory_windows "$dir" "e1111111-0000-0000-0000-000000000000" "e2222222-0000-0000-0000-000000000000"
+    cmux_inventory_workspaces "$dir" "e1111111-0000-0000-0000-000000000000" "aaaaaaaa-0000-0000-0000-000000000000" "$title"
+    case "$kind" in
+      unreadable|closed) printf '1\n' > "$dir/responses/window-e2222222-0000-0000-0000-000000000000.1.exit" ;;
+      malformed) printf '{"workspaces":null}\n' > "$dir/responses/window-e2222222-0000-0000-0000-000000000000.out" ;;
+      empty) : > "$dir/responses/window-e2222222-0000-0000-0000-000000000000.out" ;;
+      multiple-json-window) printf '[]\n[]\n' > "$dir/responses/windows.out" ;;
+      multiple-json-workspace) printf '{"workspaces":[]}\n{"workspaces":[]}\n' > "$dir/responses/window-e2222222-0000-0000-0000-000000000000.out" ;;
+    esac
+    out=$(cmux_inventory_run "$dir" '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_list_live')
+    status=$?
+    [ "$status" -eq 0 ] && [ -z "$out" ] || fail "list_live must preserve read-only empty-result contract for $kind inventory without partial tasks"
+    assert_not_contains "$(cat "$dir/log")" $'\x1f''list-panes' "incomplete inventories should refuse before resolving any task surface"
+    cmux_assert_queries_only "$dir/log"
+  done
+  pass "fm_backend_cmux_list_live: unreadable, malformed, empty or closing listed windows never publish partial tasks"
+}
+
+# shellcheck disable=SC2016 # The quoted snippets execute in the runner's child bash.
+test_inventory_rejects_malformed_or_moving_identities() {
+  local kind dir title out
+  title=$(cmux_expected_scoped_title fm-cross1)
+  for kind in bad-window duplicate-window bad-workspace moved-workspace; do
+    dir="$TMP_ROOT/inventory-identity-$kind"; mkdir -p "$dir/responses"
+    cmux_inventory_windows "$dir" "e1111111-0000-0000-0000-000000000000" "e2222222-0000-0000-0000-000000000000"
+    cmux_inventory_workspaces "$dir" "e1111111-0000-0000-0000-000000000000" "aaaaaaaa-0000-0000-0000-000000000000" "$title"
+    cmux_inventory_workspaces "$dir" "e2222222-0000-0000-0000-000000000000"
+    case "$kind" in
+      bad-window) printf '[{"id":"window:bad"}]\n' > "$dir/responses/windows.out" ;;
+      duplicate-window) cmux_inventory_windows "$dir" "e1111111-0000-0000-0000-000000000000" "e1111111-0000-0000-0000-000000000000" ;;
+      bad-workspace) cmux_inventory_workspaces "$dir" "e1111111-0000-0000-0000-000000000000" "workspace bad" "$title" ;;
+      moved-workspace) cmux_inventory_workspaces "$dir" "e2222222-0000-0000-0000-000000000000" "aaaaaaaa-0000-0000-0000-000000000000" "$title" ;;
+    esac
+    out=$(cmux_inventory_run "$dir" '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_list_live')
+    [ -z "$out" ] || fail "discovery must not claim malformed/duplicated/moving identities ($kind)"
+    assert_not_contains "$(cat "$dir/log")" $'\x1f''list-panes' "invalid identities should refuse before surface queries"
+    cmux_assert_queries_only "$dir/log"
+  done
+  pass "cmux inventory: malformed window/workspace IDs and duplicate moving membership are rejected"
+}
+
+# shellcheck disable=SC2016 # The quoted snippets execute in the runner's child bash.
+test_discovered_workspace_revalidated_after_surface_resolution() {
+  local kind operation dir title out status
+  title=$(cmux_expected_scoped_title fm-cross1)
+  for kind in closed renamed replaced duplicate; do
+    for operation in lookup ready live; do
+      dir="$TMP_ROOT/inventory-revalidate-$kind-$operation"; mkdir -p "$dir/responses"
+      cmux_inventory_windows "$dir" "e1111111-0000-0000-0000-000000000000"
+      cmux_inventory_workspaces "$dir" "e1111111-0000-0000-0000-000000000000" "cccccccc-0000-0000-0000-000000000000" "$title"
+      cp "$dir/responses/window-e1111111-0000-0000-0000-000000000000.out" "$dir/responses/window-e1111111-0000-0000-0000-000000000000.1.out"
+      cmux_inventory_panes "$dir" "cccccccc-0000-0000-0000-000000000000" "dddddddd-0000-0000-0000-000000000000"
+      case "$kind" in
+        closed) printf '1\n' > "$dir/responses/window-e1111111-0000-0000-0000-000000000000.2.exit" ;;
+        renamed) cmux_inventory_workspaces "$dir" "e1111111-0000-0000-0000-000000000000" "cccccccc-0000-0000-0000-000000000000" wrong-task ;;
+        replaced) cmux_inventory_workspaces "$dir" "e1111111-0000-0000-0000-000000000000" "eeeeeeee-0000-0000-0000-000000000000" "$title" ;;
+        duplicate) cmux_inventory_workspaces "$dir" "e1111111-0000-0000-0000-000000000000" \
+          "cccccccc-0000-0000-0000-000000000000" "$title" "eeeeeeee-0000-0000-0000-000000000000" "$title" ;;
+      esac
+      case "$operation" in
+        lookup) out=$(FM_CMUX_TITLE="$title" cmux_inventory_run "$dir" '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_workspace_id_for_label "$FM_CMUX_TITLE"'); status=$? ;;
+        ready) out=$(cmux_inventory_run "$dir" '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_target_ready "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-0000-0000-0000-000000000000" fm-cross1'); status=$? ;;
+        live) out=$(cmux_inventory_run "$dir" '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_list_live'); status=$? ;;
+      esac
+      [ -z "$out" ] || fail "$operation must not publish the stale identity after workspace $kind"
+      if [ "$operation" = live ]; then
+        [ "$status" -eq 0 ] || fail "list_live should return empty success after workspace $kind"
+      else
+        [ "$status" -ne 0 ] || fail "$operation should refuse after workspace $kind"
+      fi
+      if [ "$operation" != lookup ]; then
+        # The final scoped query must come after the surface query.
+        [ "$(tail -n 1 "$dir/log" | cut -d $'\x1f' -f 2-3)" = $'workspace\x1flist' ] \
+          || fail "$operation should revalidate the scoped workspace after surface resolution"
+      fi
+      cmux_assert_queries_only "$dir/log"
+    done
+  done
+  pass "cmux recovery: scoped revalidation rejects window closure, title rename, UUID replacement and newly duplicated title"
+}
+
+# shellcheck disable=SC2016 # The quoted snippets execute in the runner's child bash.
+test_list_live_rejects_malformed_task_titles_and_surface_identity() {
+  local kind dir title out prefix
+  title=$(cmux_expected_scoped_title fm-cross1)
+  prefix=${title%cross1}
+  dir="$TMP_ROOT/inventory-bad-titles"; mkdir -p "$dir/responses"
+  cmux_inventory_windows "$dir" "e1111111-0000-0000-0000-000000000000"
+  cmux_inventory_workspaces "$dir" "e1111111-0000-0000-0000-000000000000" \
+    "aaaaaaaa-0000-0000-0000-000000000000" "$prefix" \
+    "bbbbbbbb-0000-0000-0000-000000000000" "${prefix}.hidden" \
+    "cccccccc-0000-0000-0000-000000000000" "${prefix}bad/title" \
+    "dddddddd-0000-0000-0000-000000000000" "${prefix}"$'bad\ttitle' \
+    "eeeeeeee-0000-0000-0000-000000000000" "${prefix}"$'bad\ntitle'
+  out=$(cmux_inventory_run "$dir" '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_list_live')
+  [ -z "$out" ] || fail "discovery must not turn malformed scoped titles into task identities"
+  assert_not_contains "$(cat "$dir/log")" $'\x1f''list-panes' "malformed titles should not inspect surfaces"
+  cmux_assert_queries_only "$dir/log"
+  for kind in invalid nonmember missing; do
+    dir="$TMP_ROOT/inventory-bad-surface-$kind"; mkdir -p "$dir/responses"
+    cmux_inventory_windows "$dir" "e1111111-0000-0000-0000-000000000000"
+    cmux_inventory_workspaces "$dir" "e1111111-0000-0000-0000-000000000000" "aaaaaaaa-0000-0000-0000-000000000000" "$title"
+    case "$kind" in
+      invalid) cmux_inventory_panes "$dir" "aaaaaaaa-0000-0000-0000-000000000000" "surface:bad" ;;
+      nonmember) printf '{"panes":[{"selected_surface_id":"bbbbbbbb-0000-0000-0000-000000000000","surface_ids":["cccccccc-0000-0000-0000-000000000000"]}]}' > "$dir/responses/panes-aaaaaaaa-0000-0000-0000-000000000000.out" ;;
+      missing) printf '{"panes":[]}' > "$dir/responses/panes-aaaaaaaa-0000-0000-0000-000000000000.out" ;;
+    esac
+    out=$(cmux_inventory_run "$dir" '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_list_live')
+    [ -z "$out" ] || fail "discovery must not claim a $kind surface identity"
+    cmux_assert_queries_only "$dir/log"
+  done
+  pass "fm_backend_cmux_list_live: ignores malformed task titles and invalid, nonmember or vanished surfaces"
+}
+
+# shellcheck disable=SC2016 # The quoted snippets execute in the runner's child bash.
+test_list_live_handles_readable_empty_window_inventory() {
+  local dir out status
+  dir="$TMP_ROOT/inventory-no-windows"; mkdir -p "$dir/responses"
+  cmux_inventory_windows "$dir"
+  out=$(cmux_inventory_run "$dir" '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_list_live')
+  status=$?
+  [ "$status" -eq 0 ] && [ -z "$out" ] || fail "a readable empty window inventory should return no tasks successfully"
+  [ "$(wc -l < "$dir/log" | tr -d '[:space:]')" = 1 ] || fail "an empty window inventory should require only one read-only window query"
+  cmux_assert_queries_only "$dir/log"
+  pass "fm_backend_cmux_list_live: a readable empty window inventory returns no tasks successfully"
 }
 
 # --- fm-spawn.sh: --secondmate refuses backend=cmux --------------------------
@@ -1163,4 +1492,14 @@ test_kill_adds_sibling_when_last_in_window
 test_kill_is_best_effort_when_close_workspace_fails
 test_kill_recovers_stale_target_by_label
 test_list_live_filters_by_title_prefix
+test_list_live_discovers_other_window_without_focus_and_repeats
+test_label_lookup_and_target_ready_recover_other_window
+test_target_ready_rejects_reused_uuid_even_when_label_elsewhere
+test_cross_window_duplicate_labels_are_not_claimed
+test_create_refuses_cross_window_duplicate_and_incomplete_inventory
+test_incomplete_inventory_never_publishes_partial_tasks
+test_inventory_rejects_malformed_or_moving_identities
+test_discovered_workspace_revalidated_after_surface_resolution
+test_list_live_rejects_malformed_task_titles_and_surface_identity
+test_list_live_handles_readable_empty_window_inventory
 test_secondmate_spawn_refuses_cmux_backend
