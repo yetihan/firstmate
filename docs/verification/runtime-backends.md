@@ -1701,6 +1701,8 @@ Every mutation was bound to a still-listed UUID from the run's ownership ledger,
 The adapter under test ran from an external default shell context with a wrapper as `cmux` on `PATH`: the wrapper forwarded only `list-windows`, `workspace list`, and `list-panes` to the real app with stdout, stderr, and exit status unchanged, refused every other verb including all focus and mutation calls, and the adapter never triggered a refusal.
 Every synchronous adapter run was bracketed by session and default-context snapshots that stayed identical.
 The counterfactual compared the adapter from base commit `4735ddc6d9667dffa775cd0009f56775e56ba326` with the tested adapter from source commit `662086495ae97be1f1c201024d56046cef71f54a` against the same real two-window world.
+Both commits were session-local commits of the original unlanded 2026-10-11 shift and were discarded once this incorporation landed, so neither object is recoverable from this repository or its remote.
+The traceable anchor is landed commit `0270efec20898f54d02749985cfd4474c9bb9d72` on branch `fm/fm-cmux-uncommitted-land`, which carries the incorporation of the same change; no byte-level equivalence between the discarded commits and that anchor is claimed.
 
 All 24 checks passed:
 
