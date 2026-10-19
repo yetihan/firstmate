@@ -80,6 +80,11 @@ cmux_surface_id=<surface-uuid>
 
 The UUID pair is the active endpoint authority within one app run.
 Workspace UUIDs are not stable across an app relaunch, so recovery searches by the scoped title and then resolves the current surface id.
+Label lookup and recovery enumerate every window using `list-windows`, then read `workspace list --window <uuid>` without changing focus.
+Only an exact, unique home-scoped title can resolve a task, and its workspace membership and title are re-read in the owning window after surface resolution.
+Duplicate titles are omitted from discovery and refused by label lookup, including when they appear in different windows.
+An unreadable or malformed window response, or a window closing during the inventory scan, leaves the whole scan unusable for recovery or duplicate checking; creation refuses and discovery emits nothing for that pass.
+A later scan can recover tasks once the window inventory is readable again.
 
 ## Current operation and safety
 
@@ -120,7 +125,8 @@ Real tests share the captain's running app rather than creating an isolated cmux
 - There is no native busy or push-event signal.
 - A target can disappear after structural readiness and before the operation.
 - The only-workspace cleanup path leaves a fresh default workspace and cannot close the window.
-- Label lookup and recovery are currently scoped to the current cmux window, so a task moved to a non-current window is a known recovery blind spot.
+- Cross-window recovery is covered by offline mock regression plus one controlled live GUI pass on the running app; malformed-response and stored-UUID-reuse fixtures remain mock-only.
+- Inventory reads are not atomic; a task can change after its final identity check, and unreadable windows defer recovery for that pass.
 - Workspace ids do not survive app relaunch and are never recovery authority.
 
 ## Regression entry points
@@ -130,4 +136,4 @@ tests/fm-backend-cmux.test.sh
 tests/fm-backend-cmux-smoke.test.sh
 ```
 
-[`verification/runtime-backends.md`](verification/runtime-backends.md#cmux) records the active source and live evidence, including socket modes and last-in-window cleanup.
+[`verification/runtime-backends.md`](verification/runtime-backends.md#cmux) records the active source and live evidence, including socket modes, last-in-window cleanup, and the live cross-window recovery pass.

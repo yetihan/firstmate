@@ -1614,7 +1614,7 @@ The fake-Orca suite covers readiness, registration, create response parsing, met
 
 ## cmux
 
-The current compatibility floor is cmux 0.64, and the active live evidence uses 0.64.17 build 97 on macOS aarch64.
+The current compatibility floor is cmux 0.64, and the active live evidence spans 0.64.17 build 97 and 0.64.25 build 106 on macOS aarch64.
 Real tests use only exact `fm-test-` workspaces guarded by `tests/cmux-test-safety.sh` and never quit or relaunch the captain's app.
 
 ```sh
@@ -1667,6 +1667,57 @@ tests/fm-backend-cmux-smoke.test.sh
 ```
 
 The real smoke proves socket access, fresh readiness, current-path probing, send and keys, bounded capture, title identity, and guarded exact cleanup.
+
+### Cross-window recovery (offline)
+
+On 2026-10-11, the cmux adapter's cross-window discovery and label recovery were verified with a query-only mock CLI and real jq 1.8.2 in an isolated local copy.
+The version fixture defaults to cmux 0.64.17; these results do not establish real-app cross-window lifecycle behavior.
+The bundled cmux 0.64.25 build 106 help lists `--window` for workspace and pane queries, but no live inventory, focus, send, creation, move, or close operation was used for this pass.
+
+```sh
+LC_ALL=C bin/fm-test-run.sh tests/fm-backend-cmux.test.sh
+LC_ALL=C bin/fm-lint.sh bin/backends/cmux.sh tests/fm-backend-cmux.test.sh
+bin/fm-doc-audience-check.sh
+```
+
+The 71 mock cases passed without a capability skip, including 10 cross-window regression groups covering home ownership, duplicate labels, malformed or incomplete inventories, window closure, task renaming or replacement, surface membership, and query-only discovery.
+The targeted runner reported:
+
+```text
+FM_TEST_END 2026-10-11T02:00:46Z tests/fm-backend-cmux.test.sh exit=0 duration_ms=29894 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=30027
+```
+
+The explicit-file lint passed with pinned ShellCheck 0.11.0 and full extended analysis, and the documentation audience check passed with 105 surfaces and 432 local links.
+An identical two-window counterfactual fixture produced no discovered task with the prior adapter and the exact home-scoped task with the revised adapter.
+The separately authorized real GUI pass below completed that check on 2026-10-11.
+
+### Cross-window recovery (live GUI)
+
+On 2026-10-11 the cross-window lifecycle was verified against the running cmux app on macOS aarch64 through the app's bundled client, recorded as 0.64.25 build 106 during this verification window.
+The operator explicitly authorized disposable test windows, necessary temporary focus, and final original-window restoration.
+The driver created two disposable windows, retained a guard workspace alongside each test task, and gave two isolated Firstmate homes (homeA and homeB) one task each with distinct home-scoped titles.
+Every mutation was bound to a still-listed UUID from the run's ownership ledger, and original session metadata was re-checked after each step.
+The adapter under test ran from an external default shell context with a wrapper as `cmux` on `PATH`: the wrapper forwarded only `list-windows`, `workspace list`, and `list-panes` to the real app with stdout, stderr, and exit status unchanged, refused every other verb including all focus and mutation calls, and the adapter never triggered a refusal.
+Every synchronous adapter run was bracketed by session and default-context snapshots that stayed identical.
+The counterfactual compared the adapter from base commit `4735ddc6d9667dffa775cd0009f56775e56ba326` with the tested adapter from source commit `662086495ae97be1f1c201024d56046cef71f54a` against the same real two-window world.
+Both commits were session-local commits of the original unlanded 2026-10-11 shift and were discarded once this incorporation landed, so neither object is recoverable from this repository or its remote.
+The traceable anchor is landed commit `0270efec20898f54d02749985cfd4474c9bb9d72` on branch `fm/fm-cmux-uncommitted-land`, which carries the incorporation of the same change; no byte-level equivalence between the discarded commits and that anchor is claimed.
+
+All 24 checks passed:
+
+- The base adapter's live discovery returned no task, while the pinned adapter repeatedly discovered exactly homeA's task in a non-current window, including after the task physically moved between the two windows.
+- homeB's discovery listed only homeB's own task, and a readiness target naming homeB's workspace refused homeA's expected label.
+- A real duplicate of homeA's scoped title made label lookup and readiness refuse, omitted both duplicates from discovery, and the unique task recovered after the duplicate closed.
+- A closed target was rejected, genuinely stale stored UUIDs refreshed to a recreated task's new ids, and a renamed original refused its old label while the old title stopped resolving.
+- Real races, driven by holding one gated query while the driver mutated the world: a rename between pane resolution and identity recheck published nothing, a window closure mid-inventory refused partial recovery while a later complete inventory recovered the surviving task, and a window closure after surface resolution published nothing.
+- Cleanup removed every owned window, workspace, and task; final session metadata matched the pre-run baseline exactly; and the original window was current again after the single focus command the whole run issued.
+
+Limits retained by this pass:
+
+- Rename acknowledgements preceded visible title changes by tens to a few hundred milliseconds in a separate rename diagnostic; the delay mechanism is unresolved, so the driver boundedly waited for its own mutations to become query-visible and no cache lifetime or atomicity is claimed.
+- Inventory reads remain multiple non-atomic RPC snapshots, and a task can still change after its final identity re-read.
+- Malformed window responses and a stored UUID re-used by a different task stay offline mock fixtures; the real app never produced either state.
 
 ### Claude composer confirmation
 
