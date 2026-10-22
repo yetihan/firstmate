@@ -1,0 +1,32 @@
+# Adversarial: the Treehouse project-lock guard must still arm for ordinary project-backed
+# spawns after the nio-chat exclusion (target a522218b). A fresh claude-harness scout spawn
+# on a real git project (file:// origin), driven with the repo's own spawn fixtures
+# (tests/fixtures.sh fake tmux + treehouse stubs). The lock is pre-held by an external
+# process using the repo's own fm_wake_lib lock API.
+# date: 2026-10-22T05:39:15Z
+resolved lock path: /private/var/folders/19/lc_cnd2x4yb01m66zr7j2qkc0000gq/T/fm-nio-live.A2kdpD/guard/home/state/.treehouse-project-09178aeb5f9ddbb102d16fbd2d8c50dc4546e544.lock
+
+## run A - lock held by a live outsider (expected: refuse with the race error)
+$ fm-spawn.sh t-guard-1 /var/folders/19/lc_cnd2x4yb01m66zr7j2qkc0000gq/T//fm-nio-live.A2kdpD/guard/project --scout   # while pid 61552 holds /private/var/folders/19/lc_cnd2x4yb01m66zr7j2qkc0000gq/T/fm-nio-live.A2kdpD/guard/home/state/.treehouse-project-09178aeb5f9ddbb102d16fbd2d8c50dc4546e544.lock
+error: another Treehouse slot allocation or return is in progress for /var/folders/19/lc_cnd2x4yb01m66zr7j2qkc0000gq/T/fm-nio-live.A2kdpD/guard/project; refusing to race it
+exit=1
+VERDICT A: refused as required
+
+## run B - control, lock free (expected: spawn succeeds, guard passes)
+$ fm-spawn.sh t-guard-2 /var/folders/19/lc_cnd2x4yb01m66zr7j2qkc0000gq/T//fm-nio-live.A2kdpD/guard/project --scout
+spawned t-guard-2 harness=claude kind=scout window=firstmate:fm-t-guard-2 worktree=/var/folders/19/lc_cnd2x4yb01m66zr7j2qkc0000gq/T//fm-nio-live.A2kdpD/guard/pool
+exit=0
+VERDICT B: spawned cleanly
+
+## t-guard-2 published record pins the project-backed shape
+window=firstmate:fm-t-guard-2
+endpoint_task_id=t-guard-2
+worktree=/var/folders/19/lc_cnd2x4yb01m66zr7j2qkc0000gq/T//fm-nio-live.A2kdpD/guard/pool
+project=/var/folders/19/lc_cnd2x4yb01m66zr7j2qkc0000gq/T/fm-nio-live.A2kdpD/guard/project
+harness=claude
+kind=scout
+tasktmp=/tmp/fm-t-guard-2
+model=default
+effort=default
+busy_gen=g1792647553.62150.20008
+spawn_gen=s1792647553.61746.31259

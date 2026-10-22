@@ -1,0 +1,60 @@
+# Live fresh nio-chat scout spawn against the real local NIO Chat desktop server
+# date: 2026-10-22T05:34:07Z  worktree: /Users/roc.han/.no-mistakes/worktrees/9d8293169d02/01M5H0CBHC5C3ZYVYJN2ZVNRVR  HEAD: a522218b
+# handshake: real ~/.nio-chat-desktop/agent-protocol.json (loopback server, capabilities protocol_version 0.2)
+$ FM_ROOT_OVERRIDE='' FM_HOME=/var/folders/19/lc_cnd2x4yb01m66zr7j2qkc0000gq/T//fm-nio-live.A2kdpD/home FM_SPAWN_NO_GUARD=1 bin/fm-spawn.sh t-nio-smoke-1 --scout --harness nio-chat-agent
+error: no-mistakes gate agent must not drive the fleet (NO_MISTAKES_GATE set)
+exit=3 elapsed=1s
+# (gate-refuse note: FM_GATE_REFUSE_BYPASS=1 is the documented test-harness hatch in
+#  bin/fm-gate-refuse-lib.sh for driving the real fleet scripts from a gate worktree
+#  against a temp-sandbox fleet; the isolated FM_HOME below is that sandbox.)
+$ FM_GATE_REFUSE_BYPASS=1 FM_ROOT_OVERRIDE='' FM_HOME=/var/folders/19/lc_cnd2x4yb01m66zr7j2qkc0000gq/T//fm-nio-live.A2kdpD/home FM_SPAWN_NO_GUARD=1 bin/fm-spawn.sh t-nio-smoke-1 --scout --harness nio-chat-agent
+registered: state/t-nio-smoke-1.check.sh
+spawned t-nio-smoke-1 harness=nio-chat-agent kind=scout window=fm-t-nio-smoke-1 worktree= thread=92b65741-e2d6-4fee-b4b4-0af5e3a50b74 run=ffafa290-934f-4ec0-a53b-fbe890831194
+exit=0 elapsed=6s
+
+## published task record ($H/state/t-nio-smoke-1.meta)
+window=fm-t-nio-smoke-1
+endpoint_task_id=t-nio-smoke-1
+harness=nio-chat-agent
+kind=scout
+tasktmp=/tmp/fm-t-nio-smoke-1
+model=default
+effort=default
+spawn_gen=s1792647276.50894.5172
+backend=nio-chat
+external_ref=92b65741-e2d6-4fee-b4b4-0af5e3a50b74
+
+## run record ($H/state/t-nio-smoke-1.niochat-run)
+{
+  "task": "t-nio-smoke-1",
+  "run_id": "ffafa290-934f-4ec0-a53b-fbe890831194",
+  "status": "streaming",
+  "started": 1792647276,
+  "deadline": 1792647576,
+  "pid": 51201,
+  "note": "dispatch",
+  "announced": "",
+  "thread": "92b65741-e2d6-4fee-b4b4-0af5e3a50b74",
+  "thread_owner": "created"
+}
+
+## channel lock owner ($H/state/.niochat-channel.lock/owner)
+t-nio-smoke-1
+## treehouse project locks left in the isolated home's state (must be none)
+none: the projectless nio spawn took no treehouse lock
+
+## check registration
+-rw-------@ 1 roc.han  staff    84 Oct 22 13:34 /var/folders/19/lc_cnd2x4yb01m66zr7j2qkc0000gq/T//fm-nio-live.A2kdpD/home/state/t-nio-smoke-1.check-trust
+-rwx------@ 1 roc.han  staff  1848 Oct 22 13:34 /var/folders/19/lc_cnd2x4yb01m66zr7j2qkc0000gq/T//fm-nio-live.A2kdpD/home/state/t-nio-smoke-1.check.sh
+
+## the real agent's answer (from t-nio-smoke-1.niochat-stream.log):
+## terminal lifecycle events in the stream
+started
+completed
+## the real agent's visible answer (concatenated text deltas)
+model: None
+answer: orange
+
+## server-side thread history (GET /api/agent/v1/threads/92b65741-.../history on the real server)
+   human -> # Current worker role contract You are a crewmate: an autonomous worker agent managed by firstmate. This section establi
+   ai ->  orange

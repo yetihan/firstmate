@@ -1,0 +1,10 @@
+window=fm-t-nio-smoke-1
+endpoint_task_id=t-nio-smoke-1
+harness=nio-chat-agent
+kind=scout
+tasktmp=/tmp/fm-t-nio-smoke-1
+model=default
+effort=default
+spawn_gen=s1792647276.50894.5172
+backend=nio-chat
+external_ref=92b65741-e2d6-4fee-b4b4-0af5e3a50b74

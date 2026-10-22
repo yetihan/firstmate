@@ -1,0 +1,27 @@
+ok - gate: absent config means off, and dispatch refuses before dialing
+ok - gate: exactly on opts in
+ok - gate: wrong, empty, and symlinked values are invalid, never silently off
+ok - config dir: the gate reads the operating home, never the code root
+ok - handshake: absent, remote, and tokenless files refuse; loopback passes
+ok - ready: wrong protocol, error status, and unreachable server all refuse
+ok - handshake: one rotation is absorbed with one retry, a stuck 401 stands
+ok - parsers: run_id, terminal lifecycle, separator-free text, and done
+ok - check: one line per actionable change, marker-suppressed, absent-safe
+ok - lifecycle: dispatch, done reconcile, report, lock release, idempotence
+ok - dispatch: missing metadata and missing prompt both refuse cleanly
+ok - channel: one live holder, refusal names the holder, stale holders are reclaimed
+ok - ask_user: question surfaced, steer refused, wrong option refused, answer resumes
+ok - reconcile: an unreachable server defers the question read within a window
+ok - steer: mid-run queueing, delivery on settle, byte-exact text
+ok - timeout: the deadline fires, the run is cancelled, the task fails
+ok - cancel, stop, teardown: own-run only, thread retained on stop, ownership-gated delete
+ok - run state: busy while streaming, settled after, never a guessed idle
+ok - ring: delivery is the acknowledgement, refusal keeps the record for re-ring
+ok - adapter: typed-plane send_text delivers with an empty verdict
+ok - spawn: relaunch re-dispatches on the recorded thread and preserves meta
+ok - spawn: fresh projectless dispatch skips the Treehouse project lock
+ok - control: a nio scout relaunch without --note refuses with the documented reason
+ok - control: a nio relaunch refuses --model/--effort/foreign --harness instead of dropping them
+ok - control: a nio relaunch carries the progress note into the instructions and re-dispatches on the recorded thread
+ok - control: a spawn-plane refusal rolls the instructions back byte-exact
+ok - control: a post-dispatch spawn failure keeps the note with the live run's instructions

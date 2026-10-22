@@ -1,0 +1,7 @@
+error: could not resolve the shared Treehouse project lock for 
+exit=1
+
+## no HTTP traffic reached the real server (failure precedes dispatch): channel lock and run record in the base home
+  channel lock: absent (no dispatch started)
+  run record: absent (no run started)
+  task record: absent (nothing published)
