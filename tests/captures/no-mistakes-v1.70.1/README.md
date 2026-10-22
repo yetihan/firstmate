@@ -46,6 +46,7 @@ The original review-gate, rebased-head, unrelated-metadata, and malformed-input 
 | Changing or unverifiable authority | Genuine live and cancelled status formats | The transition between reads, malformed records, wrong identities, and unreadable inventory are injected; no live race or corrupt production inventory was captured |
 | Uninitialized repository preserves worker reporting | Actual uninitialized stdout; earlier live lifecycle-event/pane evidence | The portable test replays stdout and uses the existing pane fake |
 | Development continues after completed validation | Genuine completed status | Advancing Git and emitting worker events after completion are disposable-repository actions, not an observed recorded worker sequence |
+| Override-closed completion reads done at passed class | Genuine completed status with its recorded `passed-with-override` outcome | The open-versus-merged PR resolution rides the fake forge; the 2026-10-15 all-steps-completed override incident was not captured |
 | Optional inventory dependencies are absent | Genuine gate output and capped inventory | Missing Python/SQLite and complete-inventory compositions are simulated; the captured host had both dependencies |
 
 Passing replay assertions establish behavior for these explicit inputs, not the absent live scenarios in the final column.
