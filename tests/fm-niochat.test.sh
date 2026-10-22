@@ -922,6 +922,47 @@ EOF
   pass "spawn: relaunch re-dispatches on the recorded thread and preserves meta"
 }
 
+# A fresh (non-relaunch) nio-chat scout dispatch is projectless: the harness
+# branch empties PROJ_ABS, so the Treehouse project-lock guard must exclude the
+# runtime rather than try to resolve a lock for the empty project path (the
+# guard already excluded orca, which has the same no-treehouse-worktree shape).
+test_spawn_fresh_projectless_skips_treehouse_lock() {
+  local out rec
+  nio_case fresh
+  printf 'on\n' > "$CFG/nio-chat-worker"
+  printf 'claude\n' > "$CFG/crew-harness"
+  printf '%s\n' "$$" > "$STATE/.lock"
+  touch "$STATE/.last-watcher-beat"
+  mkdir -p "$DATA/t1"
+  cat > "$DATA/t1/brief.md" <<'EOF'
+# Task
+## Captain's intent
+Name a warm color.
+
+## Firstmate spec
+Answer in one word.
+EOF
+  nio_capable 1
+  nio_thread_create 1
+  nio_sse_completed run-1 th-1 world | nio_resp POST "$STREAM_PATH" 1
+  out=$(PATH="$FB:$PATH" FM_ROOT_OVERRIDE='' FM_HOME="$CASE" \
+    FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CFG" \
+    FM_SPAWN_NO_GUARD=1 \
+    FM_NIOCHAT_HANDSHAKE="$HS" FM_NIOCHAT_HTTP_TIMEOUT=10 \
+    FM_NIOCHAT_DISPATCH_GRACE=5 FM_NIOCHAT_RUN_TIMEOUT=600 \
+    FM_NIO_FAKE_LOG="$FAKE_LOG" FM_NIO_FAKE_RESP="$RESP" \
+    "$ROOT/bin/fm-spawn.sh" t1 --scout --harness nio-chat-agent 2>&1)
+  expect_code 0 $? "a fresh projectless nio-chat spawn must succeed"
+  assert_contains "$out" 'thread=th-1' "the fresh spawn must report the created thread"
+  assert_grep 'backend=nio-chat' "$STATE/t1.meta" "the published record must pin the nio-chat backend"
+  assert_grep 'external_ref=th-1' "$STATE/t1.meta" "the record must carry the thread reference"
+  assert_no_grep 'worktree=' "$STATE/t1.meta" "the nio endpoint contract forbids a worktree key"
+  rec=$(cat "$STATE/t1.niochat-run")
+  jq -e '.status == "streaming" and .run_id == "run-1" and .thread_owner == "created"' >/dev/null <<<"$rec" \
+    || fail "the fresh spawn must start a run on a created thread: $rec"
+  pass "spawn: fresh projectless dispatch skips the Treehouse project lock"
+}
+
 # The control-plane relaunch verb on a nio-chat task (bin/fm-control.sh): the
 # documented contract requires --note for a scout relaunch and the note rides
 # the instructions onto the recorded thread; model, effort, and a foreign
@@ -1092,6 +1133,7 @@ test_run_state_fold
 test_ring_delivers_and_acknowledges
 test_adapter_send_text_delivers_on_the_typed_plane
 test_spawn_relaunch_adopts_thread_and_preserves_meta
+test_spawn_fresh_projectless_skips_treehouse_lock
 test_control_relaunch_requires_note_for_nio_scout
 test_control_relaunch_refuses_unhonorable_axes_for_nio
 test_control_relaunch_carries_note_onto_recorded_thread
