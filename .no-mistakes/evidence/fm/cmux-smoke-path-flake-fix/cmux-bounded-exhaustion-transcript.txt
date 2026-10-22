@@ -1,0 +1,6 @@
+workspace=EA4037F7-2B17-4511-B505-0E4AA3F6A068 target=EA4037F7-2B17-4511-B505-0E4AA3F6A068:5B3325AA-9C45-49A5-8A4A-FADCF86F7BDC
+correct-label probe: '' (non-empty expected)
+mismatched-label loop: iterations=20 final_p='' wall=12.91s
+BOUNDED-EXHAUSTION OK: loop terminated after its 20-iteration budget with an empty result (the unchanged assertion would fail with its original message) in 12.91s
+assert on empty result: fails with 'current_path did not report the surface's cwd ... got' (correct - no masking)
+probe complete

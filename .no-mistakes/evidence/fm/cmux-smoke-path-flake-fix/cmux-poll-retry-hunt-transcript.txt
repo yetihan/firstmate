@@ -1,0 +1,6 @@
+--- phase 1: 300 poll trials, aged surface ---
+trial 1: RETRIED-THEN-CONVERGED iters=3 p='/tmp'
+phase1 summary: first-read-good=299 retried_then_converged=1 exhausted=0 wrong=0
+--- phase 2: 20 poll trials, fresh surface each ---
+error: cmux workspace 'fm-firstmate-d17628e4-test-probe3' already exists
+trial 1: create_task failed

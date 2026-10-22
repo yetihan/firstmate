@@ -1,0 +1,8 @@
+# cmux smoke stability loop (live, real cmux 0.65.2 app, 2026-10-22)
+# Changed test (target f9c2676e, poll loop): 50 consecutive runs of tests/fm-backend-cmux-smoke.test.sh,
+# each printing all 12 'ok -' assertions; per-run lines were 'RUN n: pass (12 ok)' for every n.
+# Then pre-fix test (base 355662c8, fixed 0.3s sleeps): up to 40 runs, early-stop on first failure.
+
+TOTAL (changed, 50 runs): 50/50 passed
+TOTAL: 50/50 passed
+BASE TOTAL: 0 failure(s) in 40 run(s)

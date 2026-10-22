@@ -1,0 +1,7 @@
+workspace=7263523B-3BE2-4679-97EC-F3D7B3B86A70 surface=274EE9B2-72DE-412D-9CCD-3CA54B32FC11 target=7263523B-3BE2-4679-97EC-F3D7B3B86A70:274EE9B2-72DE-412D-9CCD-3CA54B32FC11
+--- single-shot (pre-fix shape): 200 trials ---
+trial 1: EMPTY probe read (the reported flake shape)
+single-shot summary: empty=1 good=199 wrong=0
+--- poll (new shape): 100 trials ---
+poll summary: exhausted=0 good=100 wrong=0 max_iters_used=1
+probe complete
