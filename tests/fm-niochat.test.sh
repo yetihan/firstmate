@@ -956,7 +956,7 @@ EOF
   assert_contains "$out" 'thread=th-1' "the fresh spawn must report the created thread"
   assert_grep 'backend=nio-chat' "$STATE/t1.meta" "the published record must pin the nio-chat backend"
   assert_grep 'external_ref=th-1' "$STATE/t1.meta" "the record must carry the thread reference"
-  assert_no_grep '^worktree=' "$STATE/t1.meta" "the nio endpoint contract forbids a worktree key"
+  assert_no_grep 'worktree=' "$STATE/t1.meta" "the nio endpoint contract forbids a worktree key"
   rec=$(cat "$STATE/t1.niochat-run")
   jq -e '.status == "streaming" and .run_id == "run-1" and .thread_owner == "created"' >/dev/null <<<"$rec" \
     || fail "the fresh spawn must start a run on a created thread: $rec"
