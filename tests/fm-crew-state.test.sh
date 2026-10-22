@@ -3581,10 +3581,48 @@ test_captured_completed_history() {
   pass 'captured completed status yields to synthetic subsequent development'
 }
 
+# The real v1.70.1 completed capture carries `outcome: passed-with-override`
+# (the CI gate closed by an explicit override over one red check, 2026-10-15
+# fm-cmux-uncommitted-land wedge misfires). Replayed as the CURRENT run with no
+# subsequent development, that terminal word must read done at passed class -
+# resolving real PR state through the fake forge - never the unknown verdict
+# the unmapped word used to produce.
+test_captured_passed_with_override_is_terminal_done() {
+  reset_fakes
+  local d out
+  d=$(new_case captured-override)
+  make_repo_on_branch "$d/wt" fm/competing
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/competing.meta" "window=fm:fm-competing" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS=$(captured_axi_status completed)
+  FM_FAKE_AXI_STATUS_RUN=$FM_FAKE_AXI_STATUS
+
+  # The incident shape: the run is terminal but the PR is still open, so the
+  # supervisor must see a held-for-merge done, not unknown.
+  FM_FAKE_PR_STATE=OPEN
+  FM_FAKE_PR_MERGED=false
+  out=$(run_crew_state "$d" competing)
+  assert_contains "$out" 'state: done' 'captured passed-with-override run reads done'
+  assert_contains "$out" 'source: run-step' 'captured passed-with-override stays run-step sourced'
+  assert_contains "$out" 'run passed: PR open' 'passed-with-override resolves the open PR state'
+  assert_not_contains "$out" 'state: unknown' 'passed-with-override must not fall to the unknown branch'
+  assert_not_contains "$out" 'outcome: passed-with-override' 'the raw unmapped word never surfaces as detail'
+  assert_not_contains "$out" 'PR merged' 'an open PR must not be reported merged'
+
+  # Same word once the PR merges: still done, now with merged detail.
+  FM_FAKE_PR_STATE=MERGED
+  FM_FAKE_PR_MERGED=true
+  out=$(run_crew_state "$d" competing)
+  assert_contains "$out" 'state: done' 'merged passed-with-override run stays done'
+  assert_contains "$out" 'run passed: PR merged' 'passed-with-override reports the merged PR'
+  pass 'captured passed-with-override outcome reads done at passed class'
+}
+
 test_captured_axi_status_shapes
 test_captured_inventory_replay
 test_captured_authority_transition
 test_captured_completed_history
+test_captured_passed_with_override_is_terminal_done
 test_active_run_is_authoritative
 test_stale_needs_decision_superseded
 test_stale_blocked_superseded
