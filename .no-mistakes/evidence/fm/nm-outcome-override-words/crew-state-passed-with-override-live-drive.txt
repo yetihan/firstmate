@@ -1,0 +1,28 @@
+Live drive of bin/fm-crew-state.sh over the real captured no-mistakes v1.70.1
+`axi status` payload (tests/captures/no-mistakes-v1.70.1/completed.toon:
+status completed, outcome passed-with-override, ci_override_reason set) -
+the 2026-10-15 fm-cmux-uncommitted-land incident shape. Run identity rebound
+to a real throwaway git repo on fm/competing; external daemon/forge/tmux
+served by the product's own hermetic test doubles; the product script itself
+ran unmodified (base snapshot 355662c8 vs target 027d0ae6).
+
+
+== BEFORE base commit, passed-with-override, PR open (the 2026-10-15 incident shape) ==
+  script=/var/folders/19/lc_cnd2x4yb01m66zr7j2qkc0000gq/T//fm-cs-override.qwVaQY/base/bin outcome=passed-with-override pr=OPEN/false
+state: unknown · source: run-step · outcome: passed-with-override
+
+== AFTER  target, passed-with-override, PR open ==
+  script=/Users/roc.han/.no-mistakes/worktrees/9d8293169d02/01M5HFT7QN4XT3ZMZD83S61RK3/bin outcome=passed-with-override pr=OPEN/false
+state: done · source: run-step · run passed: PR open
+
+== AFTER  target, passed-with-override, PR merged ==
+  script=/Users/roc.han/.no-mistakes/worktrees/9d8293169d02/01M5HFT7QN4XT3ZMZD83S61RK3/bin outcome=passed-with-override pr=MERGED/true
+state: done · source: run-step · run passed: PR merged
+
+== REGRESS target, plain passed, PR open (existing word must not change) ==
+  script=/Users/roc.han/.no-mistakes/worktrees/9d8293169d02/01M5HFT7QN4XT3ZMZD83S61RK3/bin outcome=passed pr=OPEN/false
+state: done · source: run-step · run passed: PR open
+
+== ADVRS  target, unmapped outcome word (must stay honest unknown) ==
+  script=/Users/roc.han/.no-mistakes/worktrees/9d8293169d02/01M5HFT7QN4XT3ZMZD83S61RK3/bin outcome=passed-unmapped-nonsense pr=MERGED/true
+state: unknown · source: run-step · outcome: passed-unmapped-nonsense
