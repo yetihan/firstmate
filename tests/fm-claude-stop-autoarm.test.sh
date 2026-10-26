@@ -650,6 +650,43 @@ test_transient_budget_lock_publication_rides_out_the_reset() {
   pass "auto-arm: a budget-lock publication overlapping the Stop boundary rides out through the reset's bounded retry"
 }
 
+# The same race pinned deterministically at the library seam: the lock is
+# already held by a live pid before the reset runs, so the first try always
+# collides and only the bounded retry lets the reset close clean once the
+# holder's short critical section ends. A single try fails immediately and
+# leaves the whole episode behind - the shape the Stop-owned auto-arm then
+# translated into the exit-2 rewake loop. The e2e above depends on hook-side
+# timing between the arm's release and the reset; this one cannot pass
+# vacuously on a slow host.
+test_failure_episode_reset_rides_out_a_transient_lock_holder() {
+  local dir state
+  dir=$(make_primary_dir "$TMP_ROOT/reset-lib-transient-contention")
+  state="$dir/state"
+  : > "$state/.turnend-claude-blocks"
+  : > "$state/.claude-autoarm-failure-notified"
+  bash -c '
+    set -u
+    . "$1"
+    state=$2
+    sleep 60 &
+    holder=$!
+    mkdir "$state/.turnend-claude-blocks.lock"
+    printf "%s\n" "$holder" > "$state/.turnend-claude-blocks.lock/pid"
+    ( sleep 0.2; rm -rf "$state/.turnend-claude-blocks.lock" ) &
+    releaser=$!
+    rc=0
+    fm_failure_episode_reset "$state" || rc=$?
+    wait "$releaser" 2>/dev/null || true
+    kill "$holder" 2>/dev/null || true
+    wait "$holder" 2>/dev/null || true
+    exit "$rc"
+  ' _ "$ROOT/bin/fm-wake-lib.sh" "$state" \
+    || fail "reset against a transient live holder failed - the bounded retry regressed toward a single try"
+  assert_absent "$state/.turnend-claude-blocks" "the retried reset left the block budget behind"
+  assert_absent "$state/.claude-autoarm-failure-notified" "the retried reset left the failure notice behind"
+  pass "auto-arm: episode reset rides out a transient live lock holder"
+}
+
 test_owner_mutex_contention_preserves_failure_episode_reset() {
   local dir out hook_pid status watcher watcher_id holder i
   dir=$(make_primary_dir "$TMP_ROOT/reset-owner-contention")
@@ -1306,6 +1343,7 @@ test_post_alarm_actionable_close_is_suppressed
 test_benign_cycle_end_with_live_watcher_is_silent
 test_positive_recovery_budget_contention_preserves_episode
 test_transient_budget_lock_publication_rides_out_the_reset
+test_failure_episode_reset_rides_out_a_transient_lock_holder
 test_owner_mutex_contention_preserves_failure_episode_reset
 test_arms_for_x_mode_poll_need_without_inflight
 test_arms_for_registered_custom_check_without_inflight
