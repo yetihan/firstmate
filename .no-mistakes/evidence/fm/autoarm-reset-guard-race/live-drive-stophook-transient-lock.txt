@@ -1,0 +1,6 @@
+== hook parked at the reset boundary; staging the guard's transient lock publication
+== hook exit status: 0   (pre-fix defect shape was exit 2 -> silent rewake loop)
+== epoch ledger: epoch=1 owner_pid=50522 outcome=clean updated_at=1793008408
+== marker cleanly reset: .turnend-claude-blocks
+== marker cleanly reset: .claude-autoarm-failure-notified
+== hook output (empty == silent, as designed for this path):

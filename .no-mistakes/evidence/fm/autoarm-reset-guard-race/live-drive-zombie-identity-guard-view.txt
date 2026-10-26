@@ -1,0 +1,6 @@
+== zombie staged: pid=54323 alive=yes beat=fresh pid-identity=empty(0 bytes)
+fm_watcher_healthy -> DOWN (unhealthy, rc=1)
+zombie-view-rc=1
+== identity restored (38 bytes)
+fm_watcher_healthy -> UP (healthy)  [pid=54323]
+healed-view-rc=0
