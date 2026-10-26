@@ -95,10 +95,18 @@ esac
 pass "real cmux: send_text_line composes send+Enter and its output is capturable"
 
 # --- current_path: verified zellij-shape frozen cwd --------------------------
+# cmux's output visibility can lag past any fixed wait (empty probe reads
+# reproduced locally on 0.64.25+/0.65.2), so wait for the pwd probe by bounded
+# polling (herdr-smoke's seq-loop convention) instead of one fixed sleep; the
+# assertion below is unchanged.
 
 fm_backend_cmux_send_text_line "$TARGET" "cd /tmp"
-sleep 0.3
-p=$(fm_backend_cmux_current_path "$TARGET") || fail "current_path failed"
+p=""
+for _ in $(seq 1 20); do
+  p=$(fm_backend_cmux_current_path "$TARGET") || fail "current_path failed"
+  [ -n "$p" ] && break
+  sleep 0.25
+done
 case "$p" in
   */tmp) : ;;
   *) fail "real cmux: current_path did not report the surface's cwd after a direct cd, got '$p'" ;;
@@ -115,8 +123,12 @@ pass "real cmux: current_path reads the surface's live cwd after a direct cd"
 fm_backend_cmux_send_text_line "$TARGET" 'cd / && bash'
 sleep 0.5
 fm_backend_cmux_send_text_line "$TARGET" "cd /private/tmp"
-sleep 0.3
-p2=$(fm_backend_cmux_current_path "$TARGET") || fail "current_path failed inside a nested subshell"
+p2=""
+for _ in $(seq 1 20); do
+  p2=$(fm_backend_cmux_current_path "$TARGET") || fail "current_path failed inside a nested subshell"
+  [ -n "$p2" ] && break
+  sleep 0.25
+done
 case "$p2" in
   */private/tmp|*/tmp) : ;;
   *) fail "real cmux: current_path did not track a nested subshell's own cd (the treehouse-get-shaped case), got '$p2'" ;;
