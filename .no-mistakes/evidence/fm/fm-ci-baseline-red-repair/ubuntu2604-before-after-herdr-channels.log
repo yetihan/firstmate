@@ -1,0 +1,65 @@
+=== tools ===
+jq-1.8.1
+git version 2.53.0
+=== install CI-pinned herdr 0.7.4 ===
+fm-install-herdr.sh: downloading herdr-linux-aarch64 from https://github.com/ogulcancelik/herdr/releases/download/v0.7.4/herdr-linux-aarch64
+fm-install-herdr.sh: installed herdr 0.7.4 (protocol 16) to /usr/local/bin/herdr
+herdr 0.7.4
+herdr 0.7.4
+1
+
+=== BASE commit fm-backend-herdr ===
+ok - fm_backend_herdr_version_check: accepts the current protocol (14)
+ok - fm_backend_herdr_version_check: refuses an old protocol loudly
+ok - fm_backend_herdr_version_check: refuses loudly when herdr is not installed
+ok - fm_backend_herdr_workspace_label: a primary home (no marker) resolves to 'firstmate'
+ok - fm_backend_herdr_workspace_label: a secondmate home (.fm-secondmate-home) resolves to '2ndmate-<id>'
+ok - fm_backend_herdr_workspace_label: trims whitespace around the marker's secondmate id
+ok - fm_backend_herdr_workspace_label: an empty marker file falls back to the primary label 'firstmate'
+ok - fm_backend_herdr_workspace_label: two different secondmate homes get two different, non-colliding labels
+ok - fm_backend_herdr_cli: sets HERDR_SESSION AND appends a trailing --session flag on every call
+ok - herdr client selection: a live pane behind a stale shadowing client reads alive
+ok - herdr recovery-grade read: a stopped server means missing there, and nowhere else
+ok - herdr stale registration: a shell-only pane with a lingering Pi record is agent-free with an explicit reason
+ok - herdr stale registration: no registered status can outrank a shell-only process view
+ok - herdr stale registration: a registered agent with a live Pi foreground process still reads alive
+ok - herdr stale registration: only a shell-only pane demotes a registration
+ok - herdr stale registration: a transient prompt helper settles into stale-agent instead of reading live
+ok - herdr stale registration: an exhausted settle window still reads a non-shell foreground as live
+Security violation: Requested utility `pi` does not match executable name:
+  /usr/lib/cargo/bin/coreutils/sleep
+not ok - a registered agent with a live agent-named descendant must stay live/alive, got 'unknown unreadable refused'
+BASE_BACKEND_EXIT=1
+
+=== BASE commit fm-control-herdr-smoke ===
+ok - real herdr: exit on a pane with no registered agent is idempotent success
+ok - real herdr 0.7.4: a gone session reads recoverable while a live pane and a malformed target do not
+warning: /tmp/fm-control-herdr.IrdJEc/home/data/hsmoke/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+ok - real herdr: a drifted agent-free shell returns to its worktree and reuses the same endpoint
+ok - real herdr: interrupt refuses when herdr's own agent registry reports no agent
+not ok - a real agent-named foreground process reads 'shell' rather than 'agent' through pane process-info [herdr 0.7.4]
+fm-herdr-lab: missing fleet-state tripwire for 'fm-lab-control-smoke-5191'; refusing destructive calls
+BASE_SMOKE_EXIT=1
+
+=== TARGET commit fm-backend-herdr ===
+ok - fm_backend_herdr_version_check: accepts the current protocol (14)
+ok - fm_backend_herdr_version_check: refuses an old protocol loudly
+ok - fm_backend_herdr_version_check: refuses loudly when herdr is not installed
+ok - fm_backend_herdr_workspace_label: a primary home (no marker) resolves to 'firstmate'
+ok - fm_backend_herdr_workspace_label: a secondmate home (.fm-secondmate-home) resolves to '2ndmate-<id>'
+ok - fm_backend_herdr_workspace_label: trims whitespace around the marker's secondmate id
+ok - fm_backend_herdr_workspace_label: an empty marker file falls back to the primary label 'firstmate'
+ok - fm_backend_herdr_workspace_label: two different secondmate homes get two different, non-colliding labels
+ok - fm_backend_herdr_cli: sets HERDR_SESSION AND appends a trailing --session flag on every call
+ok - herdr client selection: a live pane behind a stale shadowing client reads alive
+ok - herdr recovery-grade read: a stopped server means missing there, and nowhere else
+ok - herdr stale registration: a shell-only pane with a lingering Pi record is agent-free with an explicit reason
+ok - herdr stale registration: no registered status can outrank a shell-only process view
+ok - herdr stale registration: a registered agent with a live Pi foreground process still reads alive
+ok - herdr stale registration: only a shell-only pane demotes a registration
+ok - herdr stale registration: a transient prompt helper settles into stale-agent instead of reading live
+ok - herdr stale registration: an exhausted settle window still reads a non-shell foreground as live
+Terminated
+ok - herdr stale registration: an agent process outside the foreground group still counts as alive
+Terminated
+ok - herdr stale registration: the descendant walk reads a spaced executable path whole

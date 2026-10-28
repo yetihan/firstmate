@@ -1,0 +1,17 @@
+ok - tmux liveness: a harness-named foreground process classifies alive
+ok - tmux liveness: muse's version-suffixed muse-bin-<version> classifies alive
+ok - tmux liveness: unrelated muse-containing command names stay ambiguous
+ok - tmux liveness: omp's bare binary name classifies alive
+ok - tmux liveness: unrelated omp-containing command names stay ambiguous
+ok - tmux liveness: a version-named executable under a harness install path classifies alive
+ok - tmux liveness: a version-named executable under a decoy path stays ambiguous
+ok - tmux liveness: a process neither name source attributes stays ambiguous rather than inventing an agent
+ok - tmux liveness: a launcher whose own identity reads as a bare shell classifies alive from its harness child
+ok - tmux liveness: an idle shell pane classifies dead
+ok - tmux liveness: a harness-named background process in an idle pane still classifies dead
+ok - tmux liveness: a harness-named dead pane classifies dead, not alive from its retained title
+ok - tmux liveness: an absent window classifies missing rather than inheriting tmux's active-window fallback
+ok - cursor composer: an idle Cursor pane reads empty even though the cursor row is blind
+ok - cursor composer: real typed text still reads pending, so the injection guard holds
+ok - cursor composer: an identical screen stays unknown when the pane is not Cursor
+ok - cursor composer: a stale Cursor screen over a dead shell never reads empty
