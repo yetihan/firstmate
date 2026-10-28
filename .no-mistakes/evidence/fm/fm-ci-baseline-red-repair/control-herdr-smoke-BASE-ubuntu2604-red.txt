@@ -1,0 +1,8 @@
+ok - real herdr: exit on a pane with no registered agent is idempotent success
+ok - real herdr 0.7.4: a gone session reads recoverable while a live pane and a malformed target do not
+warning: /tmp/fm-control-herdr.cO9NxF/home/data/hsmoke/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+ok - real herdr: a drifted agent-free shell returns to its worktree and reuses the same endpoint
+ok - real herdr: interrupt refuses when herdr's own agent registry reports no agent
+not ok - a real agent-named foreground process reads 'shell' rather than 'agent' through pane process-info [herdr 0.7.4]
+fm-herdr-lab: missing fleet-state tripwire for 'fm-lab-control-smoke-3102'; refusing destructive calls
+base_smoke_exit=1

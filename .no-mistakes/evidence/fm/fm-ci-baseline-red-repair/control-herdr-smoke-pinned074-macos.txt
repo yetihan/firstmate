@@ -1,0 +1,12 @@
+ok - real herdr: exit on a pane with no registered agent is idempotent success
+ok - real herdr 0.7.4: a gone session reads recoverable while a live pane and a malformed target do not
+warning: /var/folders/19/lc_cnd2x4yb01m66zr7j2qkc0000gq/T/fm-control-herdr.7TCWGf/home/data/hsmoke/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+ok - real herdr: a drifted agent-free shell returns to its worktree and reuses the same endpoint
+ok - real herdr: interrupt refuses when herdr's own agent registry reports no agent
+ok - real herdr: interrupt delivers the harness's key and proves the agent survived it
+ok - real herdr: no control verb removed the endpoint or the task's local copy
+ok - real herdr 0.7.4: a registration Herdr keeps after its agent exits reads stale-agent and recovers as dead
+ok - real herdr: exit on a pane with a stale registration is idempotent success
+warning: /var/folders/19/lc_cnd2x4yb01m66zr7j2qkc0000gq/T/fm-control-herdr.7TCWGf/home/data/hsmoke/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+ok - real herdr: a stale registration no longer blocks relaunch, and the endpoint and local copy survive
+ok - real herdr: an agent behind an unproven composer fails closed instead of typing an exit command into it

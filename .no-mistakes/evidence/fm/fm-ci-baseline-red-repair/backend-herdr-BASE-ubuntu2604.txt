@@ -1,0 +1,2 @@
+base_backend_exit=1 ok=17 not_ok=1
+not ok - a registered agent with a live agent-named descendant must stay live/alive, got 'unknown unreadable refused'

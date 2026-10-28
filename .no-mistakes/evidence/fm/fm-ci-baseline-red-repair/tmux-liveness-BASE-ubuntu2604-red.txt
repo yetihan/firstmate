@@ -1,0 +1,3 @@
+last verdict for liveness:agent was missing (expected alive); title=sh comms=[sh ]
+not ok - a running harness-named foreground process must classify alive
+base_lane_exit=1

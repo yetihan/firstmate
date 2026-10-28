@@ -1,0 +1,21 @@
+== backend-herdr full log (failing test only) ==
+backend_herdr_exit=1
+ok - herdr presentation cleanup: emptying close behind focus ends the exact shell without a move or focus change
+not ok - repositioned emptying close should succeed through the pane-death path: warning: herdr presentation cleanup could not verify workspace.move support; closing without the focus-safe removal path
+warning: herdr presentation pane close changed focus and the exact prior tab response was ambiguous
+== start default herdr session (CI shape) ==
+1
+== fm-control-herdr-smoke.test.sh ==
+ok - real herdr: exit on a pane with no registered agent is idempotent success
+ok - real herdr 0.7.4: a gone session reads recoverable while a live pane and a malformed target do not
+warning: /tmp/fm-control-herdr.nunSaA/home/data/hsmoke/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+ok - real herdr: a drifted agent-free shell returns to its worktree and reuses the same endpoint
+ok - real herdr: interrupt refuses when herdr's own agent registry reports no agent
+ok - real herdr: interrupt delivers the harness's key and proves the agent survived it
+ok - real herdr: no control verb removed the endpoint or the task's local copy
+ok - real herdr 0.7.4: a registration Herdr keeps after its agent exits reads stale-agent and recovers as dead
+ok - real herdr: exit on a pane with a stale registration is idempotent success
+warning: /tmp/fm-control-herdr.nunSaA/home/data/hsmoke/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+ok - real herdr: a stale registration no longer blocks relaunch, and the endpoint and local copy survive
+ok - real herdr: an agent behind an unproven composer fails closed instead of typing an exit command into it
+smoke_exit=0

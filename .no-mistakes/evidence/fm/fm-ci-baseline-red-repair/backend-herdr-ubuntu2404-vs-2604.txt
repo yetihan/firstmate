@@ -1,0 +1,18 @@
+Unable to find image 'ubuntu:24.04' locally
+24.04: Pulling from library/ubuntu
+e2d2bb84d022: Pulling fs layer
+2238dc1b4376: Download complete
+e2d2bb84d022: Download complete
+e2d2bb84d022: Pull complete
+Digest: sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c
+Status: Downloaded newer image for ubuntu:24.04
+jq-1.7
+GNU bash, version 5.2.21(1)-release (aarch64-unknown-linux-gnu)
+exit=1 ok=89 not_ok=1
+not ok - repositioned emptying close should succeed through the pane-death path: warning: herdr presentation cleanup could not verify workspace.move support; closing without the focus-safe removal path
+=== ubuntu:24.04 done ===
+jq-1.8.1
+GNU bash, version 5.3.9(1)-release (aarch64-unknown-linux-gnu)
+exit=1 ok=89 not_ok=1
+not ok - repositioned emptying close should succeed through the pane-death path: warning: herdr presentation cleanup could not verify workspace.move support; closing without the focus-safe removal path
+=== ubuntu:26.04 done ===

@@ -1,0 +1,13 @@
+== OLD construction: symlink named claude-link -> sleep ==
+Security violation: Requested utility `claude-link` does not match executable name:
+  /usr/lib/cargo/bin/coreutils/sleep
+exit_code=1 elapsed_ms=1
+-- is it in the process table?
+1 bash -c  set -u mkdir -p /lab/bin echo "== OLD construction: symlink named claude-link -> sleep ==" ln -s "$(command -v sleep)" /lab/bin/claude-link start=$(date +%s%N) /lab/bin/claude-link 30; rc=$? end=$(date +%s%N) echo "exit_code=$rc elapsed_ms=$(( (end-start)/1000000 ))" echo "-- is it in the process table?" pgrep -af claude-link || echo "(no claude-link process alive)" echo echo "== NEW construction: symlink named pi -> bash -c \"sleep 30; :\" ==" ln -s "$(command -v bash)" /lab/bin/pi /lab/bin/pi -c "sleep 30; :" & pid=$! sleep 1 echo "after 1s, process table view:" ps -o pid,comm,args -p "$pid" --ppid "$pid" kill "$pid" 2>/dev/null wait "$pid" 2>/dev/null echo "new stand-in was resident and had to be killed" 
+
+== NEW construction: symlink named pi -> bash -c "sleep 30; :" ==
+after 1s, process table view:
+    PID COMMAND         COMMAND
+     16 pi              /lab/bin/pi -c sleep 30; :
+     18 sleep           sleep 30
+new stand-in was resident and had to be killed
