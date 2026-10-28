@@ -207,13 +207,16 @@ pass "real herdr: interrupt refuses when herdr's own agent registry reports no a
 # A registration alone no longer proves an agent (issue #4115): the adapter
 # verifies the pane's processes through the real `pane process-info` view. So
 # the registered agent is backed by a real agent-named foreground process - a
-# symlink to a long-running system binary named `claude`, the same construction
-# tests/fm-tmux-agent-liveness.test.sh uses (a copied platform binary fails code
-# signing on macOS arm64; the symlink name is what the kernel records as argv[0]).
+# symlink to bash running `sleep 900; :`, the same construction
+# tests/fm-tmux-agent-liveness.test.sh uses and explains (a copied platform
+# binary fails code signing on macOS arm64, and a coreutils symlink is refused
+# under its alien name by Ubuntu 26.04's uutils coreutils, so the pane would
+# stay a shell forever). The symlink name is what the kernel records as the
+# executable identity, bash never validates its invoked name, and the trailing
+# `:` keeps the bash resident behind its forked sleep.
 AGENT_BIN="$SCRATCH/agentbin"
 mkdir -p "$AGENT_BIN"
-SLEEP_BIN=$(command -v sleep) || fail "sleep not found"
-ln -s "$SLEEP_BIN" "$AGENT_BIN/claude"
+ln -s "$(command -v bash)" "$AGENT_BIN/claude"
 printf -v AGENT_Q '%q' "$AGENT_BIN/claude"
 
 wait_process_state() {  # <expected> <tries>
@@ -227,7 +230,7 @@ wait_process_state() {  # <expected> <tries>
 }
 
 start_agent_process() {
-  fm_backend_herdr_send_text_line "$SESSION:$PANE_ID" "$AGENT_Q 900" \
+  fm_backend_herdr_send_text_line "$SESSION:$PANE_ID" "$AGENT_Q -c 'sleep 900; :'" \
     || fail "could not start the agent-named foreground process in the task pane"
   wait_process_state agent 50 \
     || version_fail "a real agent-named foreground process reads '$(fm_backend_herdr_pane_process_state "$SESSION" "$PANE_ID")' rather than 'agent' through pane process-info"
@@ -307,10 +310,10 @@ awk -F= '$1 == "harness" {$0="harness=claude"} {print}' "$HOME_DIR/state/hsmoke.
 mv "$HOME_DIR/state/hsmoke.meta.tmp" "$HOME_DIR/state/hsmoke.meta"
 pass "real herdr: a stale registration no longer blocks relaunch, and the endpoint and local copy survive"
 
-# Last: the foreground process is a plain `sleep`, so the pane never draws any
-# recognized composer chrome. exit's composer-empty guard (bin/fm-control.sh)
-# therefore refuses before ever typing the exit command, rather than typing it
-# into a live agent that ignores it and reporting a stop that did not happen.
+# Last: the foreground process is a plain stand-in agent that draws no
+# recognized composer chrome, so exit's composer-empty guard (bin/fm-control.sh)
+# refuses before ever typing the exit command, rather than typing it into a
+# live agent that ignores it and reporting a stop that did not happen.
 start_agent_process
 herdr pane report-agent "$PANE_ID" --source fm-control-smoke --agent fm-control-smoke-agent \
   --state idle --session "$SESSION" >/dev/null 2>&1 \
