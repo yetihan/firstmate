@@ -80,14 +80,18 @@ jobs:
   tests-portable-parallel-1:
     name: Behavior portable parallel 1
     runs-on: ubuntu-latest
-    # This cap is intended as a hang tripwire, but the previous lane 1 reached
-    # it; the former "~1 min of serial sum" estimate no longer applies.
+    # This cap is intended as a hang tripwire, not a duration budget. When
+    # ubuntu-latest moved to 26.04 (2026-10-26) the lane's wall time rose past
+    # the former 10-minute cap: main runs 40266385118 and 40266408525 and PR
+    # run 40304142483 attempt 2 were all cancelled at that cap, while attempt 1
+    # completed only just under it, so 15 minutes restores roughly 50% headroom
+    # over the observed ~10-minute wall time on that image.
     # Compare it with the derived hints from fm-test-run.sh --check-coverage
     # and completed job timings, allowing for setup and runner-speed spread.
     # A packed hint sum is not a measured job wall time or proof of headroom.
     # Evidence and refresh procedure: docs/fm-test-portable-shards.md.
     # Changes to this cap or the lane count require a separate scope decision.
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
@@ -117,6 +121,15 @@ jobs:
           # fails these lanes the day upstream ships. Bump the pin only
           # together with adapting .pi/extensions and the Pi-facing fixtures.
           npm install -g @earendil-works/pi-coding-agent@0.87.0
+          # tsc for the Pi extension typecheck, pinned the same way: the
+          # ubuntu-latest image shipped tsc until it moved to 26.04
+          # (2026-10-26), which dropped it, and this lane's
+          # --fail-on-gate-skip contract below treats a missing typecheck
+          # prerequisite as a broken lane rather than a valid skip. A floating
+          # typescript could add checks the pinned Pi 0.87.0 types have not
+          # met; bump it only together with a green local run of
+          # tests/fm-pi-primary-types.test.sh.
+          npm install -g typescript@5.9.3
           npm ls -g --depth 0 @earendil-works/pi-coding-agent
       - name: Run portable parallel shard 1
         run: |
@@ -136,8 +149,11 @@ jobs:
   tests-portable-parallel-2:
     name: Behavior portable parallel 2
     runs-on: ubuntu-latest
-    # Same timeout rationale as portable parallel shard 1 above.
-    timeout-minutes: 10
+    # Same timeout rationale as portable parallel shard 1 above: a hang
+    # tripwire with ~50% headroom over the slowest healthy job observed on the
+    # ubuntu-latest 26.04 image (shard 2 recorded about nine minutes of test
+    # wall time there, plus checkout and tool installation).
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
@@ -240,8 +256,11 @@ jobs:
         run: |
           set -eu
           mkdir -p "$RUNNER_TEMP/fm-test"
-          # The Pi package is installed above and CI provides npm and tsc, so
-          # any missing typecheck prerequisite is a broken lane, not a valid skip.
+          # The Pi package is installed above and the image provides npm, so
+          # any missing typecheck prerequisite is a broken lane, not a valid
+          # skip. tsc is not guaranteed in this job (the ubuntu-latest 26.04
+          # image dropped it): no serial script needs it, and the only one
+          # that does is pinned to portable parallel 1, which installs tsc.
           bin/fm-test-run.sh --lane "$FM_SERIAL_LANE" \
             --fail-on-gate-skip 'Pi extension typecheck prerequisite not found' \
             --json "$RUNNER_TEMP/fm-test/fm-test-timing-portable-serial-${FM_SERIAL_SHARD}.json"

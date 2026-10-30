@@ -160,6 +160,11 @@ In that 2026-08-03 seven-adapter run, Claude Code was the only harness whose tit
 Codex reported `codex-aarch64-a` at 0.145.0 and `codex` at 0.146.0, and Kimi Code reported `kimi-code` as its foreground `comm` at 0.29.1 and `kimi` at 0.31.1, so these identities move between ordinary patch releases in both directions.
 That is the evidence for treating any single process name as a surface under vendor control rather than a stable contract.
 
+The portable regressions stand these identities up with real processes rather than installed harnesses, and the stand-in construction is part of the verified surface: each stand-in is a symlink to bash running `sleep <n>; :`, never a symlink to a coreutils binary.
+ubuntu-latest moved from 24.04 to 26.04 on 2026-10-26, and 26.04's default uutils multi-call coreutils refuse an alien argv[0] (`Security violation: Requested utility ... does not match executable name`), so the former `claude`-named symlink to `sleep` exited instantly, the pane died, and the window closed under the classifier.
+bash never validates its invoked name and the trailing `:` keeps it resident behind the forked sleep, so the harness name survives as the kernel identity on both macOS and Linux.
+`tests/fm-tmux-agent-liveness.test.sh` owns the construction and the per-platform divergence assertions; run it against a new runner image before trusting the lane.
+
 The crewmate-only Muse Code 0.1.0-R708.1 adapter was verified separately on 2026-08-05 against tmux on macOS arm64.
 Its installed `muse-bin-0.1.0-R708.1` foreground identity classified `alive`, while `musescore`, `amuse`, `muse-binary`, and `muse-bind` remained ambiguous in the portable regression.
 [`muse.md`](muse.md#process-identity) owns the artifact identity and launcher evidence for that verification.
@@ -1398,7 +1403,7 @@ ok - real herdr: a stale registration no longer blocks relaunch, and the endpoin
 ok - real herdr: an agent that does not stop fails closed instead of being reported as stopped
 ```
 
-The registry read through `herdr pane report-agent` is the same source `fm_backend_herdr_agent_state` classifies, and since 2026-09-10 that registration counts as an agent only while `pane process-info` shows a harness process behind it, so the guard backs the registration with a real process named like a harness (a symlink to `sleep`) and then stops that process, with no real harness launched.
+The registry read through `herdr pane report-agent` is the same source `fm_backend_herdr_agent_state` classifies, and since 2026-09-10 that registration counts as an agent only while `pane process-info` shows a harness process behind it, so the guard backs the registration with a real process named like a harness (a stand-in built in `tests/fm-control-herdr-smoke.test.sh` on the construction `tests/fm-tmux-agent-liveness.test.sh` owns) and then stops that process, with no real harness launched.
 That command is the guard that refreshes this record; run it after every Herdr upgrade rather than trusting the version above.
 
 For Pi on Herdr 0.9.0, `herdr agent get` reflects whether the agent process remains live; its registration does not persist merely because the pane and parent shell do.
