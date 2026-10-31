@@ -1,0 +1,32 @@
+# claude-code 2.1.309 print-mode probes on out-of-table model zhipu/glm-5.3 (via local magpie proxy)
+# Same prompt and fresh random secret file for both runs; only the --tools flag differs.
+
+## Run WITHOUT the --tools remount (pre-fix launch shape)
+[claude-code:unrecognized_model] {"model":"zhipu/glm-5.3","query_source":"sdk"}
+beforeafter-5308ccdd033c6a82ad12
+## Run WITH the exact --tools remount from bin/fm-spawn.sh launch_template
+# flag: --tools default,Bash,Read,Write,Edit,Glob,Grep,Agent,Skill,WebSearch,WebFetch,Monitor,NotebookEdit,LSP,AskUserQuestion,TodoWrite,TaskOutput,TaskStop,EnterPlanMode,ExitPlanMode
+error: unknown option '--tools default,Bash,Read,Write,Edit,Glob,Grep,Agent,Skill,WebSearch,WebFetch,Monitor,NotebookEdit,LSP,AskUserQuestion,TodoWrite,TaskOutput,TaskStop,EnterPlanMode,ExitPlanMode'
+
+## Run WITH the exact --tools remount (flag and value as separate argv words, as the real pane launch sends them)
+# flag: --tools default,Bash,Read,Write,Edit,Glob,Grep,Agent,Skill,WebSearch,WebFetch,Monitor,NotebookEdit,LSP,AskUserQuestion,TodoWrite,TaskOutput,TaskStop,EnterPlanMode,ExitPlanMode
+[claude-code:unrecognized_model] {"model":"zhipu/glm-5.3","query_source":"sdk"}
+withflag-4c8752f5b445ea4fde69
+
+(The error line above the corrected run is a probe-harness artifact, not a product
+result: zsh does not word-split an unquoted $VAR, so that invocation passed the
+flag and its value as ONE argv token and claude-code correctly rejected the
+malformed option. The real fm-spawn launch and the corrected run below pass
+'--tools' and the comma list as separate words, which claude-code 2.1.309 accepts.)
+
+## Verdict
+- claude-code 2.1.309 accepts the exact remount flag list from bin/fm-spawn.sh
+  (unknown/renamed tool names in the list are ignored, as documented).
+- With the flag, the out-of-table model zhipu/glm-5.3 used Bash and returned the
+  exact random secret (withflag-...).
+- WITHOUT the flag on this installed build (2.1.309), tools still mounted in both
+  print and interactive modes: the stripping described for claude-code 2.1.306+
+  did not reproduce here, in either -p or TUI mode, with or without the ambient
+  CLAUDE_CODE_MODEL_CAPABILITIES env var. The captain observed it on the earlier
+  build in real fleet use; on 2.1.309 the flag is a belt-and-braces remount whose
+  presence is verified harmless and effective.

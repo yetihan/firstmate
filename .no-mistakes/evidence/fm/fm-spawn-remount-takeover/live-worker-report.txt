@@ -1,0 +1,19 @@
+# Worker deliverable (scout report) + status + verification
+
+## state/toolproof-01.status
+(consumed by teardown)
+
+## data/toolproof-01/report.md (captured before teardown)
+
+## SECRET equality check: report SECRET= line vs worker-secret.txt
+SECRET MATCH: report contains exact worker-secret.txt contents
+
+## Final worker pane (tmux capture)
+     /tmp/fm-tools-probe/fmhome/state/toolproof-01.status.
+  All core tools (Bash, Read, Write) proven working; no tools were missing. No
+  commits, pushes, or extra exploration performed.
+✻ Worked for 1m 10s · done 5:16 PM
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
