@@ -13,6 +13,7 @@ Busy hooks verified 2026-07-28 on Claude Code 2.1.220.
 | Model | `--model <model>`; discover through the interactive `/model` picker, with alias or full-name shape documented by `claude --help`. |
 | Effort | `--effort <low\|medium\|high\|xhigh\|max>`, verified on 2.1.196. |
 | Permissions | `--dangerously-skip-permissions` by default, or `--permission-mode auto` when `config/claude-permission-mode` is `auto`; the `auto` shape verified on 2.1.269, and `../../../../../docs/configuration.md` "Claude permission mode" owns the file. |
+| Tools | Every claude launch remounts the built-in tool set through `--tools`, because claude-code 2.1.306+ strips the core tools (Bash/Read/Write/Edit/Glob/Grep/Agent/Skill) for models outside its built-in table; unknown names are ignored and the list caps at the built-in set, and `launch_template()` in `../../../../../bin/fm-spawn.sh` owns the exact list. |
 
 ## Workspace trust
 
