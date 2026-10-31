@@ -13,6 +13,7 @@ TMP_ROOT=$(fm_test_tmproot fm-backend-orca-tests)
 # HOME and reach the developer's real store, while empty falls through to it
 # and adds no launch prefix, since fm-spawn only prefixes a non-empty value.
 SPAWN_HOME="$TMP_ROOT/user-home"
+CLAUDE_TOOLS_REMOUNT_FLAG="--tools default,Bash,Read,Write,Edit,Glob,Grep,Agent,Skill,WebSearch,WebFetch,Monitor,NotebookEdit,LSP,AskUserQuestion,TodoWrite,TaskOutput,TaskStop,EnterPlanMode,ExitPlanMode"
 mkdir -p "$SPAWN_HOME"
 
 write_spawn_brief() {  # <data-dir> <id>
@@ -560,7 +561,7 @@ test_spawn_writes_orca_metadata_and_launches_harness() {
     "spawn should reuse the implicit terminal returned by Orca worktree creation"
   assert_contains "$(cat "$log")" $'orca\x1f''terminal'$'\x1f''send'$'\x1f''--terminal'$'\x1f''term-spawn'$'\x1f''--text'$'\x1f''export GOTMPDIR=/tmp/fm-orcaspawnz1/gotmp'$'\x1f''--enter'$'\x1f''--json' \
     "spawn did not export GOTMPDIR through the Orca terminal"
-  assert_contains "$(cat "$log")" "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}'" \
+  assert_contains "$(cat "$log")" "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions $CLAUDE_TOOLS_REMOUNT_FLAG --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}'" \
     "spawn did not send the selected harness launch command through Orca"
   rm -rf "/tmp/fm-$id"
   pass "fm-spawn.sh --backend orca: reuses implicit terminal, records metadata, launches harness"
